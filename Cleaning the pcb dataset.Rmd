@@ -7,9 +7,7 @@ output: github_document
 
 ### Preliminary cleaning (creating pcb_tib2)
 
-By importing and viewing the given dataset `pcb.csv` we see that there are 5056 observations of 18 variables.  We begin by cleaning the dataset; we first look for NA values; we see that some values are stated explicitly as NA.  Moreover, some values are stated as $-99.99$, $-9.0000$ etc.; we interpret all such values as NA values.   We therefore replace all values that are less than $-8$ with NA values, in order to consistently denote all NA values as NA; we denote the resulting tibble as `pcb_tib1`. The numbers of NA values for each CB28, ..., CB180 (listed in ascending numerical order of n for CBn) in `pcb_tib1` are listed below.
-
-We find that there are $(298, 474, 138, 97, 6, 28, 30)$  NA values coded in this manner for $(CB28, CB52, CB101, CB118, CB138, CB153, CB180)$, respectively.
+By importing and viewing the given dataset `pcb.csv` we see that there are 5056 observations of 18 variables.  We begin by cleaning the dataset; we first look for NA values; we see that some values are stated explicitly as NA.  Moreover, some values are stated as $-99.99$, $-9.0000$ etc.; we interpret all such values as NA values.   We therefore replace all values that are less than $-8$ with NA values, in order to consistently denote all NA values as NA; we denote the resulting tibble as `pcb_tib1`.  We find that there are $(298, 474, 138, 97, 6, 28, 30)$  NA values coded in this manner for $(CB28, CB52, CB101, CB118, CB138, CB153, CB180)$, respectively.
 
 ```{r chunk1, include=FALSE}
 library(RCurl)
@@ -31,7 +29,7 @@ pcb_tib1 <- pcb_tib %>%
   mutate(CB180 = ifelse(CB180< -8, NA, CB180) ) 
 ```
 
-```{r chunk3}
+```{r chunk3, include=FALSE}
 sum(is.na(pcb_tib1$CB28))
 sum(is.na(pcb_tib1$CB52))
 sum(is.na(pcb_tib1$CB101))
@@ -48,7 +46,7 @@ pcb_tib2 <- pcb_tib1 %>%
   filter(!is.na(CB153))
 ```
 
-```{r chunk5}
+```{r chunk5, include=FALSE}
 sum(is.na(pcb_tib2$CB28))
 sum(is.na(pcb_tib2$CB52))
 sum(is.na(pcb_tib2$CB101))
@@ -92,18 +90,95 @@ sum(is.na(pcb_tib3$CB153))
 sum(is.na(pcb_tib3$CB180))
 ```
 
-#### Visualisation of pcb_tib3$CB138 
+The data `pcb_tib3$CB138` contains 11 negative values which each represents a censored value.   For every one of the 11 corresponding observations the only uncensored value is for CB138, whereas the values for the other 6 PCBs are given by one of two negative values, whereby CB138 and CB180 have the same value as one another, and the four values for CB28, CB52, CB101 and CB118 are equal to one another.  So we choose to remove these 11 sparse observations, which results in `pcb_tib4`, which has 5017 observations.   Our motivation is that `pcb_tib4` has no censored values and no missing values for both CB138 and CB153; this allows us to perform linear regression analysis much more straightforwardly.
 
-Since `pcb_tib3$CB138` contains no censored or NA values, we will use this data as the basis for the prediction of values of the other variables using linear regression.  Let's first show a histogram of `pcb_tib3$CB138`; we see that the distribution has large left-skew.
-
-```{r chunk9}
-hist(pcb_tib3$CB138, breaks=40)
+```{r chunk8b, include=FALSE}
+pcb_tib4 <- pcb_tib3 %>%
+  filter(CB138>0)
 ```
 
-Let's now show a histogram of the logarithm (with base $e$) of this data; we see that the distribution still has some (but much less) left-skew and loosely approximates the shape of a normal distribution.  We will therefore preliminarily assume that this data has a log-normal distribution.
+#### The distributions of CB138 and CB153 
+
+Let's first show histograms of `pcb_tib4$CB138` and `pcb_tib4$CB153`; we see that these distributions each have a large left-skew.
 
 ```{r chunk9}
-hist(log(pcb_tib3$CB138), breaks=40)
+hist(pcb_tib4$CB138, breaks=40)
+hist(pcb_tib4$CB153, breaks=40)
+```
+
+Histograms (not shown) of the logarithm (with bases: 2, $e$, 10, 100 and  1000 respectively) of the CB153 data, showed that the shape of the distribution does not change much when we change the base.  We will therefore use base $e$ (as is standard practice) throughout the remainder of this report.  Histograms for $log(CB138)$ and $log(CB153)$ are displayed below.  We see that each of these distributions still has some (but much less) left-skew and that each loosely approximates the shape of a normal distribution.  We will therefore make the working assumption from now on that the data for each of our seven PCBs of interest has a log-normal distribution.
+
+```{r chunk10, include=FALSE}
+hist(log2(pcb_tib4$CB153), breaks=40)
+hist(log(pcb_tib4$CB153), breaks=40)
+hist(log10(pcb_tib4$CB153), breaks=40)
+hist(log(pcb_tib4$CB153, base = 100), breaks=40)
+hist(log(pcb_tib4$CB153, base = 1000), breaks=40)
+```
+
+```{r chunk11}
+hist(log(pcb_tib4$CB138), breaks=40)
+hist(log(pcb_tib4$CB153), breaks=40)
+```
+
+#### Preliminary linear regression analysis
+
+Since the data for CB153 was most complete in the original dataset `pcb.csv` we will view CB153 as the predictor variable (denoted by x and shown on the horizontal axis) throughout our analysis.   We will use "response variables" to denote the variables that we make predictions for, "response variables" (denoted by y and shown on the vertical axis).   We first display a scatter plot for $y=CB138$ versus $x=CB153$; the second scatter plot shows $y=log(CB138)$ versus $x=log(CB153)$.
+
+```{r chunk12}
+plot(pcb_tib4$CB138, pcb_tib4$CB153)
+plot(log(pcb_tib4$CB138), log(pcb_tib4$CB153))
+```
+
+The summary output for two fitted models corresponding to the two previous scatter plots is displayed below.   The output shows "Adjusted R-squared:  0.9572" for the model with $y=log(CB138)$ and $x=log(CB153)$, whereas  "Adjusted R-squared:  0.931" for the model without logarithms.  We conclude that the correlation is stronger when using the logarithms of the PCB concentrations.  From now on, we will use logarithm-transformed data throughout. 
+
+```{r chunk13}
+ylog <- log(pcb_tib4$CB153)
+xlog <- log(pcb_tib4$CB138)
+lin_mod1 <- lm(pcb_tib4$CB153 ~ pcb_tib4$CB138)
+lin_mod1_loglog <- lm(ylog ~ xlog)
+summary(lin_mod1)
+summary(lin_mod1_loglog)
+```
+
+This preliminary regression analysis demonstrates the feasibility of our approach: to use the fact that PCB concentrations are strongly correlated to make predictions for censored values and for missing values.
+
+### Predicting concentrations of CB118 from CB138 and CB153
+
+#### Model selection
+
+For CB118 in `pcb_tib4`: the number of censored values is 25, and the number of missing values is 71.   We will first create `pcb_tib5` by excluding observations for which CB118 is censored or missing.  We will then fit linear model for `pcb_tib5` with CB118 as response; CB138 and CB153 are the two predictor variables, we will fit models for these predictors separately, we will also fit a multiple linear regression model using both predictors.  We will then use this model to make predictions for the missing and censored CB118 values.
+
+
+```{r chunk14}
+# sum(is.na(pcb_tib4$CB118))
+pcb_tib5 <- pcb_tib4 %>%
+  filter(!is.na(CB153)) %>%
+  filter(CB118>0)  
+mod2_x1 <- log(pcb_tib5$CB153)
+mod2_x2 <- log(pcb_tib5$CB138)
+mod2_y <- log(pcb_tib5$CB118)
+lin_mod2x1 <- lm(mod2_y ~ mod2_x1)
+lin_mod2x2 <- lm(mod2_y ~ mod2_x2)
+lin_mod2x1x2_indep <- lm(mod2_y ~ mod2_x1+mod2_x2)
+lin_mod2x1x2 <- lm(mod2_y ~ mod2_x1*mod2_x2)
+summary(lin_mod2x1)
+summary(lin_mod2x2)
+summary(lin_mod2x1x2)
+summary(lin_mod2x1x2_indep)
+```
+
+From the summary output data above, we select `lin_mod2x2` for predicting CB118 values because it has the largest values for the t- and F-statistics and it also has only one predictor variable so it is easier to work with.
+
+#### Predictions for CB118 using `lin_mod2x2`
+
+I do not yet know how to perform a prediction.  I will learn :)
+
+```{r chunk15, include = FALSE}
+# pcb_tib6 <- pcb_tib4 %>%
+#   filter(is.na(CB153)) %>%
+#   filter(CB118, CB138, CB153)
+# predicted_CB118 <- predict.lm(lin_mod2x2, pcb_tib6)
 ```
 
 
