@@ -1,0 +1,109 @@
+---
+title: "Cleaning the pcb dataset"
+author: "Marc Roddis"
+date: "2/9/2020"
+output: github_document
+---
+
+### Preliminary cleaning (creating pcb_tib2)
+
+By importing and viewing the given dataset `pcb.csv` we see that there are 5056 observations of 18 variables.  We begin by cleaning the dataset; we first look for NA values; we see that some values are stated explicitly as NA.  Moreover, some values are stated as $-99.99$, $-9.0000$ etc.; we interpret all such values as NA values.   We therefore replace all values that are less than $-8$ with NA values, in order to consistently denote all NA values as NA; we denote the resulting tibble as `pcb_tib1`. The numbers of NA values for each CB28, ..., CB180 (listed in ascending numerical order of n for CBn) in `pcb_tib1` are listed below.
+
+We find that there are $(298, 474, 138, 97, 6, 28, 30)$  NA values coded in this manner for $(CB28, CB52, CB101, CB118, CB138, CB153, CB180)$, respectively.
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+```{r chunk2, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+pcb_tib1 <- pcb_tib %>%
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< -8, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< -8, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< -8, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< -8, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< -8, NA, CB180) ) 
+```
+
+```{r chunk3}
+sum(is.na(pcb_tib1$CB28))
+sum(is.na(pcb_tib1$CB52))
+sum(is.na(pcb_tib1$CB101))
+sum(is.na(pcb_tib1$CB118))
+sum(is.na(pcb_tib1$CB138))
+sum(is.na(pcb_tib1$CB153))
+sum(is.na(pcb_tib1$CB180))
+```
+
+From viewing `pcb_tib1` we see that all observations (with only one exception) which have an NA value for CB153 also have NA values for all variables except CB138.  So as a matter of convenience we remove these sparse observations, which results in `pcb_tib2`, which has 5028 observations.  We find that there are $(271, 447, 111, 70, 0, 0, 3)$  NA values coded in this manner for $(CB28, CB52, CB101, CB118, CB138, CB153, CB180)$, respectively.  We do indeed see that did remove all observations that consisted almost completely of NA values.   We will use `pcb_tib2` are the starting point for the remainder of our analysis. 
+
+```{r chunk4, include=FALSE}
+pcb_tib2 <- pcb_tib1 %>%
+  filter(!is.na(CB153))
+```
+
+```{r chunk5}
+sum(is.na(pcb_tib2$CB28))
+sum(is.na(pcb_tib2$CB52))
+sum(is.na(pcb_tib2$CB101))
+sum(is.na(pcb_tib2$CB118))
+sum(is.na(pcb_tib2$CB138))
+sum(is.na(pcb_tib2$CB153))
+sum(is.na(pcb_tib2$CB180))
+```
+
+#### Further cleaning (creating pcb_tib3)
+
+Starting from `pcb_tib2` we will now check the three observations for CB180 that have NA values; we see that these observations have measured values for at least five other PCB in each case.  Checking for further NA values, we now see that many values for CB28 are stated as either $0.0000$ or $0$, which we will also interpret as NA values; let's see how many such values there are.  Since `tib_CB28zero` has 360 rows, we conclude that for CB28 there are 360 NA values that are encoded as $0.0000$ or $0$.
+
+```{r chunk6, include=FALSE}
+tib_CB180zero <- pcb_tib2 %>%
+  filter(between(CB180,-0.0001, 0.0001))
+```
+
+Replacing all such encoded NA values with explicit NA values resulted in `pcb_tib3`, which has $(631, 565, 125, 71, 0, 0, 44)$  NA values for $(CB28, CB52, CB101, CB118, CB138, CB153, CB180)$, respectively.  
+
+```{r chunk7, include=FALSE}
+pcb_tib3 <- pcb_tib2 %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52> -0.0001 & CB52< 0.0001, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101> -0.0001 & CB101< 0.0001, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118> -0.0001 & CB118< 0.0001, NA, CB118) ) %>%
+  mutate(CB180 = ifelse(CB180> -0.0001 & CB180< 0.0001, NA, CB180) )
+# tib_CB28postrezero <- tib_CB28rezeroed %>%
+#   filter(between(CB28,-0.0001, 0.0001))
+# tib3_CB180zero <- pcb_tib3 %>%
+#   filter(between(CB180,-0.0001, 0.0001))
+```
+
+```{r chunk8, include=FALSE}
+sum(is.na(pcb_tib3$CB28))
+sum(is.na(pcb_tib3$CB52))
+sum(is.na(pcb_tib3$CB101))
+sum(is.na(pcb_tib3$CB118))
+sum(is.na(pcb_tib3$CB138))
+sum(is.na(pcb_tib3$CB153))
+sum(is.na(pcb_tib3$CB180))
+```
+
+#### Visualisation of pcb_tib3$CB138 
+
+Since `pcb_tib3$CB138` contains no censored or NA values, we will use this data as the basis for the prediction of values of the other variables using linear regression.  Let's first show a histogram of `pcb_tib3$CB138`; we see that the distribution has large left-skew.
+
+```{r chunk9}
+hist(pcb_tib3$CB138, breaks=40)
+```
+
+Let's now show a histogram of the logarithm (with base $e$) of this data; we see that the distribution still has some (but much less) left-skew and loosely approximates the shape of a normal distribution.  We will therefore preliminarily assume that this data has a log-normal distribution.
+
+```{r chunk9}
+hist(log(pcb_tib3$CB138), breaks=40)
+```
+
+
