@@ -1,0 +1,397 @@
+---
+title: "Exploratory data analysis looking for evidence of confounding"
+author: "Marc Roddis"
+date: "2/13/2020"
+output: github_document
+---
+
+### Exploratory data analysis looking for evidence of confounding
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+```{r chunk2, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+pcb_tib1 <- pcb_tib %>%
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< -8, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< -8, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< -8, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< -8, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< -8, NA, CB180) ) 
+```
+
+```{r chunk4, include=FALSE}
+pcb_tib2 <- pcb_tib1 %>%
+  filter(!is.na(CB153))
+```
+
+```{r chunk7, include=FALSE}
+pcb_tib3 <- pcb_tib2 %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52> -0.0001 & CB52< 0.0001, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101> -0.0001 & CB101< 0.0001, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118> -0.0001 & CB118< 0.0001, NA, CB118) ) %>%
+  mutate(CB180 = ifelse(CB180> -0.0001 & CB180< 0.0001, NA, CB180) )
+```
+
+```{r chunk8b, include=FALSE}
+pcb_tib4 <- pcb_tib3 %>%
+  filter(CB138>0)
+```
+
+We begin with `pcb_tib4` which was created as described in my document "Cleaning the pcb dataset".  We will first mutate `pcb_tib4` (and denote this mutated tibble as `pcb_tib4m`)  so that it contains the logarithms of the concentrations of CB138 and CB153 instead of the concentrations themselves.  In this document we will produce explore the effect of various variables on the appearance of the scatter plot, and also on the Adjusted R-squared and slope coefficient for a fitted linear model in each case.  We begin by looking at the effect of location `LOC` followed by `SPECIES`, age `ALDR`, `YEAR`, percentage fat `FPRC`.  Throughout this document, we use y = CB153 and x = CB138 (note: x and y are in the opposite sense here to their sense in "Cleaning the pcb dataset").
+
+```{r chunk11b, include=FALSE}
+pcb_tib4m <- pcb_tib4 %>%
+  mutate(CB138 = log(CB138)) %>%
+  mutate(CB153 = log(CB153))
+```
+
+Our first plot displays all 5017 observations from `pcb_tib4m`.
+
+```{r chunk12}
+plot(pcb_tib4m$CB138, pcb_tib4m$CB153)
+```
+
+### Exploring the variable location `LOC`
+
+We first get an overview by showing a scatter plot of all observations, colour coded by location (this is a colour coded version of the previous plot).   We see that there are too many locations (27, to be precise) to display clearly in a single plot.  
+
+```{r chunk12b}
+ggplot(data = pcb_tib4m) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+```
+
+We will now create sub-tibbles by filtering by location, and display the corresponding scatter plot from each.  The plots below each show all of the observations from a single location.
+
+```{r chunk12c, include=FALSE}
+pcb_tib4m_aengsk <- pcb_tib4m %>%
+  filter(LOC == "Ängskärsklubb")
+pcb_tib4m_fladen <- pcb_tib4m %>%
+   filter(LOC == "Fladen")
+pcb_tib4m_holmoe <- pcb_tib4m %>%
+   filter(LOC == "Holmöarna")
+pcb_tib4m_kvaedoefj <- pcb_tib4m %>%
+  filter(LOC == "Kvädöfjärden")
+pcb_tib4m_landsort <- pcb_tib4m %>%
+  filter(LOC == "Landsort")
+pcb_tib4m_SEGOtland <- pcb_tib4m %>%
+  filter(LOC == "SE Gotland")
+pcb_tib4m_utlaengan <- pcb_tib4m %>%
+  filter(LOC == "Utlängan")
+pcb_tib4m_utlaengan_spring <- pcb_tib4m %>%
+  filter(LOC == "Utlängan (spring)")
+pcb_tib4m_vaederoe <- pcb_tib4m %>%
+  filter(LOC == "Väderöarna")
+```
+
+```{r chunk12d}
+ggplot(data = pcb_tib4m_aengsk) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Ängskärsklubb")
+ggplot(data = pcb_tib4m_fladen) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Fladen")
+ggplot(data = pcb_tib4m_holmoe) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Holmöarna")
+ggplot(data = pcb_tib4m_kvaedoefj) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Kvädöfjärden")
+ggplot(data = pcb_tib4m_landsort) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Landsort")
+ggplot(data = pcb_tib4m_SEGOtland) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "SE Gotland")
+ggplot(data = pcb_tib4m_utlaengan) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Utlängan")
+ggplot(data = pcb_tib4m_utlaengan_spring) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Utlängan (spring)")
+ggplot(data = pcb_tib4m_vaederoe) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Väderöarna")
+```
+
+We will now join the tibble for location "Ängskärsklubb" with the other  "one-location-tibbles" to produce tibbles and corresponding scatter plots for "Ängskärsklubb" paired with one other location.  A total of 19 scatter plots were generated and viewed; these plots showed overlays of different combinations of the locations shown above.   These 19 plots are omitted, they did not show any additional features of interest that are not shown in the above plots. 
+
+```{r chunk12d2, include=FALSE}
+pcb_tib4m_aengsk_fladen <- full_join(pcb_tib4m_aengsk, pcb_tib4m_fladen)
+pcb_tib4m_aengsk_holmoe <- full_join(pcb_tib4m_aengsk, pcb_tib4m_holmoe)
+pcb_tib4m_aengsk_kvaedoefj <- full_join(pcb_tib4m_aengsk, pcb_tib4m_kvaedoefj)
+pcb_tib4m_aengsk_landsort <- full_join(pcb_tib4m_aengsk, pcb_tib4m_landsort)
+pcb_tib4m_aengsk_SEGOtland <- full_join(pcb_tib4m_aengsk, pcb_tib4m_SEGOtland)
+pcb_tib4m_aengsk_utlaengan <- full_join(pcb_tib4m_aengsk, pcb_tib4m_utlaengan)
+pcb_tib4m_aengsk_utlaengan_spring <- full_join(pcb_tib4m_aengsk, pcb_tib4m_utlaengan_spring)
+pcb_tib4m_aengsk_vaederoe <- full_join(pcb_tib4m_aengsk, pcb_tib4m_vaederoe)
+```
+
+```{r chunk12e, include=FALSE}
+ggplot(data = pcb_tib4m_aengsk_fladen) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_holmoe) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_kvaedoefj) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_landsort) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_SEGOtland) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_utlaengan) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_utlaengan_spring) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_vaederoe) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+```
+
+We will now join the tibble for location "Fladen" with the other  "one-location-tibbles" to produce tibbles and corresponding scatter plots for "Fladen" paired with one other location.
+
+```{r chunk12e2, include=FALSE}
+pcb_tib4m_fladen_holmoe <- full_join(pcb_tib4m_fladen, pcb_tib4m_holmoe)
+pcb_tib4m_fladen_kvaedoefj <- full_join(pcb_tib4m_fladen, pcb_tib4m_kvaedoefj)
+pcb_tib4m_fladen_landsort <- full_join(pcb_tib4m_fladen, pcb_tib4m_landsort)
+pcb_tib4m_fladen_SEGOtland <- full_join(pcb_tib4m_fladen, pcb_tib4m_SEGOtland)
+pcb_tib4m_fladen_utlaengan <- full_join(pcb_tib4m_fladen, pcb_tib4m_utlaengan)
+pcb_tib4m_fladen_utlaengan_spring <- full_join(pcb_tib4m_fladen, pcb_tib4m_utlaengan_spring)
+pcb_tib4m_fladen_vaederoe <- full_join(pcb_tib4m_fladen, pcb_tib4m_vaederoe)
+```
+
+```{r chunk12e3, include=FALSE}
+ggplot(data = pcb_tib4m_fladen_holmoe) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_fladen_kvaedoefj) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_fladen_landsort) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_fladen_SEGOtland) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_fladen_utlaengan) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_utlaengan) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_fladen_utlaengan_spring) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_fladen_vaederoe) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+```
+
+We now create tibbles and corresponding scatter plots that each cover three or more locations.
+
+```{r chunk12f, include=FALSE}
+pcb_tib4m_aengsk_fladen_holmoe <- full_join(pcb_tib4m_aengsk_fladen, pcb_tib4m_holmoe)
+pcb_tib4m_aengsk_fladen_holmoe_kvaedoefj <- full_join(pcb_tib4m_aengsk_fladen_holmoe, pcb_tib4m_kvaedoefj)
+pcb_tib4m_aengsk_fladen_holmoe_kvaedoefj_landsort <- full_join(pcb_tib4m_aengsk_fladen_holmoe_kvaedoefj, pcb_tib4m_landsort)
+```
+
+```{r chunk12g, include=FALSE}
+ggplot(data = pcb_tib4m_aengsk_fladen_holmoe) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_fladen_holmoe_kvaedoefj) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+ggplot(data = pcb_tib4m_aengsk_fladen_holmoe_kvaedoefj_landsort) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = LOC))
+```
+
+### Exploring the variable `SPECIES`
+
+We will now choose one of these locations and display plots grouped by species.  We begin by choosing "Fladen" because its scatter plot has a curious disjointed  appearance.  The scatter plot below shows distinct clustering according to species.  This strongly suggests that species could be a confounding variable with respect to the association between CB138 and CB153.
+
+```{r chunk13}
+ggplot(data = pcb_tib4m_fladen) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = SPECIES))
+```
+
+We will now get an overview (with regard to species) by showing a scatter plot of all 5017 observations from `pcb_tib4m`, colour coded by species (this is a colour coded version of the first scatter plot in this document).   
+
+```{r chunk14}
+ggplot(data = pcb_tib4m) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = SPECIES))
+```
+
+We will now create sub-tibbles by filtering by species, and display the corresponding scatter plot from each.  The plots below each show all of the observations from a single species.
+
+```{r chunk15, include=FALSE}
+pcb_tib4m_blue_mussel <- pcb_tib4m %>%
+  filter(SPECIES == "Blue mussel")
+pcb_tib4m_cod <- pcb_tib4m %>%
+   filter(SPECIES == "Cod")
+pcb_tib4m_eelpout <- pcb_tib4m %>%
+   filter(SPECIES == "Eelpout")
+pcb_tib4m_herring <- pcb_tib4m %>%
+  filter(SPECIES == "Herring")
+pcb_tib4m_perch <- pcb_tib4m %>%
+  filter(SPECIES == "Perch")
+```
+
+```{r chunk16}
+ggplot(data = pcb_tib4m_blue_mussel) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Blue mussel")
+ggplot(data = pcb_tib4m_cod) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Cod")
+ggplot(data = pcb_tib4m_eelpout) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Eelpout")
+ggplot(data = pcb_tib4m_herring) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Herring")
+ggplot(data = pcb_tib4m_perch) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Perch")
+```
+
+### Fitting linear models for these sub-tibbles
+
+We will now fit a linear model for y=CB153 and x=CB138 in the same way we did in our earlier document "Cleaning the pcb dataset", except that we will only use observations from SPECIES="Herring" this time.  We conjecture that species is a confounding variable and that we will could obtain a higher R-squared value by accounting for this.  Our conjecture is validated by the model summary output below which shows the higher value: "Adjusted R-squared:  0.9713".
+
+```{r chunk101}
+lin_mod101 <- lm(pcb_tib4m_herring$CB153 ~ pcb_tib4m_herring$CB138)
+summary(lin_mod101)
+```
+
+We now repeat this process by fitting corresponding linear models for the other four species.  The adjusted R-squared values are (0.911, 0.933, 0.940, 0.971, 0.964) and the slope coefficients are (0.926, 0.904, 1.061, 0.844, 0.892) for (Blue mussel, Cod, Eelpout, Herring, Perch) respectively.  
+
+```{r chunk102, include=FALSE}
+lin_mod102bm <- lm(pcb_tib4m_blue_mussel$CB153 ~ pcb_tib4m_blue_mussel$CB138)
+summary(lin_mod102bm)
+lin_mod102c <- lm(pcb_tib4m_cod$CB153 ~ pcb_tib4m_cod$CB138)
+summary(lin_mod102c)
+lin_mod102e <- lm(pcb_tib4m_eelpout$CB153 ~ pcb_tib4m_eelpout$CB138)
+summary(lin_mod102e)
+lin_mod102p <- lm(pcb_tib4m_perch$CB153 ~ pcb_tib4m_perch$CB138)
+summary(lin_mod102p)
+```
+
+We will continue our search for confounders using `pcb_tib4m_herring` as our starting point; let's begin with an overview of this whole dataset grouped by location.  There are observations from herring from 22 locations, which is too many to view clearly,  so let's filter by the same locations we looked at earlier.  Of these, there are six locations that each have over 30 observations for herring.  Scatter plots for these locations were viewed (not shown in this document), and a linear model was fitted for each.  The adjusted R-squared values are (0.956, 0.953, 0.960, 0.915, 0.953, 0.950) and the slope coefficients are (0.875, 0.831, 0.914, 0.868, 0.831, 0.948) for (Ängskärsklubb, Fladen, Landsort, Utlängan, Utlängan (spring), Väderöarna) respectively.  The R-squared values are all within the interval [0.95, 0.96] except for Utlängan (0.915), the scatter plot for Utlängan does not show any unusual patterns, so we will exclude Utlängan from further study.  
+
+```{r chunk103, include=FALSE}
+pcb_tib4m_aengsk_he <- pcb_tib4m_herring %>%
+  filter(LOC == "Ängskärsklubb")
+pcb_tib4m_fladen_he <- pcb_tib4m_herring %>%
+   filter(LOC == "Fladen")
+pcb_tib4m_landsort_he <- pcb_tib4m_herring %>%
+  filter(LOC == "Landsort")
+pcb_tib4m_utlaengan_he <- pcb_tib4m_herring %>%
+  filter(LOC == "Utlängan")
+pcb_tib4m_utlaengan_spring_he <- pcb_tib4m_herring %>%
+  filter(LOC == "Utlängan (spring)")
+pcb_tib4m_vaederoe_he <- pcb_tib4m_herring %>%
+  filter(LOC == "Väderöarna")
+ggplot(data = pcb_tib4m_aengsk_he) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Ängskärsklubb Herring")
+ggplot(data = pcb_tib4m_fladen_he) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Fladen Herring")
+ggplot(data = pcb_tib4m_landsort_he) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Landsort Herring")
+ggplot(data = pcb_tib4m_utlaengan_he) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Utlängan Herring")
+ggplot(data = pcb_tib4m_utlaengan_spring_he) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Utlängan (spring) Herring")
+ggplot(data = pcb_tib4m_vaederoe_he) + 
+  geom_point(mapping = aes(x = CB138, y = CB153)) +
+  labs(title = "Väderöarna Herring")
+```
+
+```{r chunk104, include=FALSE}
+lin_mod104he_aen <- lm(pcb_tib4m_aengsk_he$CB153 ~ pcb_tib4m_aengsk_he$CB138)
+summary(lin_mod104he_aen)
+lin_mod104he_fl <- lm(pcb_tib4m_fladen_he$CB153 ~ pcb_tib4m_fladen_he$CB138)
+summary(lin_mod104he_fl)
+lin_mod104he_la <- lm(pcb_tib4m_landsort_he$CB153 ~ pcb_tib4m_landsort_he$CB138)
+summary(lin_mod104he_la)
+lin_mod104he_ut <- lm(pcb_tib4m_utlaengan_he$CB153 ~ pcb_tib4m_utlaengan_he$CB138)
+summary(lin_mod104he_ut)
+
+lin_mod104he_ut_s <- lm(pcb_tib4m_utlaengan_spring_he$CB153 ~ pcb_tib4m_utlaengan_spring_he$CB138)
+summary(lin_mod104he_fl)
+
+lin_mod104he_vae <- lm(pcb_tib4m_vaederoe_he$CB153 ~ pcb_tib4m_vaederoe_he$CB138)
+summary(lin_mod104he_vae)
+# ggplot(data = pcb_tib4m_utlaengan_he) + 
+#   geom_point(mapping = aes(x = CB138, y = CB153)) +
+#   labs(title = "Utlängan Herring")
+```
+
+We will now proceed with data for herring from Landsort by first displaying a scatter plot grouped by age `ALDR`.   No confounding or clustering by age can be discerned from this plot,    Two linear models were then fitted: one for the 169 fish aged 2-3 and one for the 254 fish aged 5-7.  The adjusted R-squared values are (0.894, 0.922) and the slope coefficients are (0.893, 0.859)  for (2-3 years old, 4-7 years old) respectively; these values are quite similar so we will not view `ALDR` as a confounding variable at this stage so we will not filter by `ALDR`.
+
+```{r chunk105a, include=FALSE}
+pcb_tib4m_utlaengan_he_age2_3 <- pcb_tib4m_utlaengan_he %>%
+  filter(ALDR <= 3)
+pcb_tib4m_utlaengan_he_age4_7 <- pcb_tib4m_utlaengan_he %>%
+  filter(ALDR > 3)
+lin_mod104he_ut_age2_3 <- lm(pcb_tib4m_utlaengan_he_age2_3$CB153 ~ pcb_tib4m_utlaengan_he_age2_3$CB138)
+summary(lin_mod104he_ut_age2_3)
+lin_mod104he_ut_age4_7 <- lm(pcb_tib4m_utlaengan_he_age4_7$CB153 ~ pcb_tib4m_utlaengan_he_age4_7$CB138)
+summary(lin_mod104he_ut_age4_7)
+```
+
+We will now explore grouping by `YEAR`.  The scatter plot shown below is grouped by `YEAR` and shows distinct clustering, so we will next explore filtering by `YEAR`.
+
+```{r chunk105b}
+# ggplot(data = pcb_tib4m_utlaengan_he) + 
+#   geom_point(mapping = aes(x = CB138, y = CB153, color = ALDR))
+ggplot(data = pcb_tib4m_utlaengan_he) + 
+  geom_point(mapping = aes(x = CB138, y = CB153, color = YEAR))
+```
+
+We will begin by fitting two linear models: one for the 208 observations from the 20th century and one for the 215 observations from the 21st century.  The adjusted R-squared values are (0.928, 0.954) and the slope coefficients are (0.993, 0.997)  for (20th century, 21st century) respectively.  The slope coefficients are remarkably similar for the two centuries, so we will not filter by `YEAR`.
+
+```{r chunk106, include=FALSE}
+pcb_tib4m_utlaengan_he_cent20 <- pcb_tib4m_utlaengan_he %>%
+  filter(YEAR < 2000)
+pcb_tib4m_utlaengan_he_cent21 <- pcb_tib4m_utlaengan_he %>%
+  filter(YEAR > 1999)
+lin_mod104he_ut_cent20 <- lm(pcb_tib4m_utlaengan_he_cent20$CB153 ~ pcb_tib4m_utlaengan_he_cent20$CB138)
+summary(lin_mod104he_ut_cent20)
+lin_mod104he_ut_cent21 <- lm(pcb_tib4m_utlaengan_he_cent21$CB153 ~ pcb_tib4m_utlaengan_he_cent21$CB138)
+summary(lin_mod104he_ut_cent21)
+```
+
+We will now explore whether we should filter by fat percentage `FPRC`.  The adjusted R-squared values are (0.956, 0.929, 0.931, 0.967) and the slope coefficients are (0.879, 0.815, 0.763, 0.964)  for fat percentages that are (LOW, MEDIUM, HIGH, VHIGH) respectively.  Although these slope coefficients do show some variation, these values decrease then increase, so there is no clear pattern.  Moreover the adjusted R-squared values are all in the fairly narrow interval [0.929, 0.967], so there is no clear evidence for filtering the dataset by `FPRC` so we will not do this.
+
+```{r chunk107, include=FALSE}
+pcb_tib4m_utlaengan_he_fprcLOW <- pcb_tib4m_utlaengan_he %>%
+  filter(FPRC <= 2)
+pcb_tib4m_utlaengan_he_fprcMEDIUM <- pcb_tib4m_utlaengan_he %>%
+  filter(FPRC > 2 & FPRC < 3)
+pcb_tib4m_utlaengan_he_fprcHIGH <- pcb_tib4m_utlaengan_he %>%
+  filter(FPRC >= 3 & FPRC < 5)
+pcb_tib4m_utlaengan_he_fprcVHIGH <- pcb_tib4m_utlaengan_he %>%
+  filter(FPRC >= 5)
+
+lin_mod104he_ut_fprcLOW <- lm(pcb_tib4m_utlaengan_he_fprcLOW$CB153 ~ pcb_tib4m_utlaengan_he_fprcLOW$CB138)
+summary(lin_mod104he_ut_fprcLOW)
+lin_mod104he_ut_fprcMEDIUM <- lm(pcb_tib4m_utlaengan_he_fprcMEDIUM$CB153 ~ pcb_tib4m_utlaengan_he_fprcMEDIUM$CB138)
+summary(lin_mod104he_ut_fprcMEDIUM)
+lin_mod104he_ut_fprcHIGH <- lm(pcb_tib4m_utlaengan_he_fprcHIGH$CB153 ~ pcb_tib4m_utlaengan_he_fprcHIGH$CB138)
+summary(lin_mod104he_ut_fprcHIGH)
+lin_mod104he_ut_fprcVHIGH <- lm(pcb_tib4m_utlaengan_he_fprcVHIGH$CB153 ~ pcb_tib4m_utlaengan_he_fprcVHIGH$CB138)
+summary(lin_mod104he_ut_fprcVHIGH)
+
+ggplot(data = pcb_tib4m_utlaengan_he_fprcLOW) + 
+  geom_point(mapping = aes(x = CB138, y = CB153))
+ggplot(data = pcb_tib4m_utlaengan_he_fprcMEDIUM) + 
+  geom_point(mapping = aes(x = CB138, y = CB153))
+ggplot(data = pcb_tib4m_utlaengan_he_fprcHIGH) + 
+  geom_point(mapping = aes(x = CB138, y = CB153))
+ggplot(data = pcb_tib4m_utlaengan_he_fprcVHIGH) + 
+  geom_point(mapping = aes(x = CB138, y = CB153))
+```
+
+In summary, we explored possible confounding variables and concluded that we should filter by `SPECIES` because the scatter plot for herring from Fladen showed distinct clusters for "Cod" and "Herring".    A conclusion supported by weaker evidence is that we should also filter by location `LOC`; the scatter plots for different locations did show some differences of appearance, however, linear models for different locations were not fitted so this evidence is weaker than for `SPECIES`.
