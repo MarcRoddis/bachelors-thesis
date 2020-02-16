@@ -35,6 +35,7 @@ lm_fit3 <- lm(y_3 ~ x)
 summary(lm_fit1)
 summary(lm_fit2)
 summary(lm_fit3)
+hist(y_2, breaks=40)
 ```
 
 We will base our simulation methodology upon the exploratory work described above by choosing values for alpha, beta and k to correspond to those obtained from fitting a linear model to the relevant part of the dataset in each instance.
@@ -123,6 +124,125 @@ tib3_cenreg2_prelog
 
 Although we do not yet understand the above unexpected results, we did get the highest likelihood-r value by using dist=gaussian on the logarithmed data, which is the way I had intended to do it all along.   We will therefore proceed as we had intended.  We begin by comparing the likelihood-r = 0.978 value with the Adjusted-R-squared=0.957 value we obtained in our document "Cleaning the pcb dataset"; squaring 0.978 gives 0.956, so these values are very similar.  We expected this similarity because only 11 of 5028 values were censored so the proportion of censored values was 0.0022 (which is very low).  
 
-### Comparison of the strength of association when including or excluding censored values when fitting the linear model (proportion of censored values > 0.0022)
+### Comparison of the strength of association between x=CB153 and y=CB180 (proportion of censored values = 0.115) for exclusion, substitution and use of cenreg()
 
-We will repeat the process described in the previous section, except that we will now use CB180 as the response variable because CB180 has only 23 missing values but 578 censored values.  This means that we can remove the observations for which the CB180 value is missing, which will mean that this comparison corresponds to that of the previous section with the sole exception that the proportion of censored values is much higher (0.115).
+We will repeat the process described in the previous section, except that we will now use CB180 as the response variable because `pcb_tib3$CB180` has only 44 missing values but 571 censored values.  This means that we can remove the observations for which the CB180 value is missing and still retain the overwhelming majority of observations.  This comparison will correspond to that of the previous section with the sole exception that the proportion of censored values is much higher (0.115) than previously (0.0022).
+
+From the below output, we see that the value of likelihood-r for `tib3_cenreg_180` was 0.918 (and 0.918^2=0.843).
+
+```{r chunk8}
+pcb_tib3_CB180CI <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(CI180 = CB180 < 0) %>%
+  mutate(CB180 = ifelse(CB180< 0, abs(CB180), CB180) ) %>%
+  mutate(CB180 = log(CB180))
+tib3_cenreg_180 = cenreg(Cen(pcb_tib3_CB180CI$CB180, pcb_tib3_CB180CI$CI180)~pcb_tib3_CB180CI$CB153, dist="gaussian")
+tib3_cenreg_180
+plot(pcb_tib3_CB180CI$CB180 ~ pcb_tib3_CB180CI$CB153)
+```
+
+We will now mutate `pcb_tib3_CB180CI` by substitution of each of the censored values by LOQ/sqrt(2) and then fit a linear model to the resulting tibble `pcb_tib3_CB180SUB`; the Adjusted R-squared was 0.852 in this case which is similar to the value 0.843 we obtained above by squaring the likelihood-r value.  The scatter plot below has a very similar appearance to the one above; we see that these plots are not identical since (for example) the plot above shows three adjacent touching points aligned approximately vertically whereas the plot below does not have that row of three touching points.
+
+```{r chunk9}
+pcb_tib3_CB180SQRT2SUB <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< 0, abs(CB180)/sqrt(2), CB180) ) %>%
+  mutate(CB180 = log(CB180))
+tib3_SUB_180 <- lm(pcb_tib3_CB180SQRT2SUB$CB180 ~ pcb_tib3_CB180SQRT2SUB$CB153)
+summary(tib3_SUB_180)
+plot(pcb_tib3_CB180SQRT2SUB$CB180 ~ pcb_tib3_CB180SQRT2SUB$CB153)
+```
+
+We will now use the methodology documented in "Cleaning the pcb dataset" to substitute the CB180 censored values with values predicted by various linear models,  We begin by using the above model `tib3_SUB_180`.  We get Adjusted R-squared =  0.879, which is slightly higher than before.  However, we see from the scatter plot below that substitution using predicted values has given plotted points that lie on the regression line (these points are seen in the lower left of the plot) so the increase in R-squared is at the expense of unrealistic alignment of the substituted points. 
+
+```{r chunk10}
+pcb_tib3_CB180LMpredSUB1 <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(CB180 = ifelse(CB180<= 0, -1.16411 + 1.11048*CB153, log(CB180) ) ) 
+tib3_CB180LMpredSUB1 <- lm(pcb_tib3_CB180LMpredSUB1$CB180 ~ pcb_tib3_CB180LMpredSUB1$CB153)
+summary(tib3_CB180LMpredSUB1)
+plot(pcb_tib3_CB180LMpredSUB1$CB180 ~ pcb_tib3_CB180LMpredSUB1$CB153)
+```
+
+The values of the fitted coefficients (-1.205686, 1.075557) are close to but not equal to the coefficients (-1.16411, 1.11048) from the prediction equation, so we will now augment this procedure by performing a second iteration to see whether we can attain convergence for the outputted coefficients (of the fitted model) with respect to the inputted coefficients (of the prediction equation).
+
+```{r chunk11}
+pcb_tib3_CB180LMpredSUB2 <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(CB180 = ifelse(CB180<= 0, -1.205686 + 1.075557*CB153, log(CB180) ) ) 
+tib3_CB180LMpredSUB2 <- lm(pcb_tib3_CB180LMpredSUB2$CB180 ~ pcb_tib3_CB180LMpredSUB2$CB153)
+summary(tib3_CB180LMpredSUB2)
+plot(pcb_tib3_CB180LMpredSUB2$CB180 ~ pcb_tib3_CB180LMpredSUB2$CB153)
+```
+
+We now perform a third iteration.
+
+```{r chunk12}
+pcb_tib3_CB180LMpredSUB3 <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(CB180 = ifelse(CB180<= 0, -1.230632 + 1.061417*CB153, log(CB180) ) ) 
+tib3_CB180LMpredSUB3 <- lm(pcb_tib3_CB180LMpredSUB3$CB180 ~ pcb_tib3_CB180LMpredSUB3$CB153)
+summary(tib3_CB180LMpredSUB3)
+plot(pcb_tib3_CB180LMpredSUB3$CB180 ~ pcb_tib3_CB180LMpredSUB3$CB153)
+```
+
+We now attain convergence (six decimal places) on this fourth iteration.  However, the resulting model has Adjusted-R-squared = 0.876, which is lower than the value (0.879) from the first iteration, so this iterative procedure appears to have no merit.
+
+```{r chunk13}
+pcb_tib3_CB180LMpredSUB4 <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(CB180 = ifelse(CB180<= 0, -1.238696 + 1.056880*CB153, log(CB180) ) ) 
+tib3_CB180LMpredSUB3 <- lm(pcb_tib3_CB180LMpredSUB3$CB180 ~ pcb_tib3_CB180LMpredSUB3$CB153)
+summary(tib3_CB180LMpredSUB3)
+plot(pcb_tib3_CB180LMpredSUB3$CB180 ~ pcb_tib3_CB180LMpredSUB3$CB153)
+```
+
+We will now perform a variation on the first iteration above by adding `NOISE = 0.4*rnorm(4984)` to the predicted values to give the scatter plot a more realistic appearance.  The resulting fitted model has coefficients (-1.21328, 1.07028) and Adjusted-R-squared = 0.866.
+
+```{r chunk14}
+pcb_tib3_CB180LMpredSUBwNOISE <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(NOISE = 0.4*rnorm(4984)) %>%
+  mutate(CB180 = ifelse(CB180<= 0, -1.16411 + 1.11048*CB153+NOISE, log(CB180) ) ) 
+tib3_CB180LMpredSUBwNOISE <- lm(pcb_tib3_CB180LMpredSUBwNOISE$CB180 ~ pcb_tib3_CB180LMpredSUBwNOISE$CB153)
+summary(tib3_CB180LMpredSUBwNOISE)
+plot(pcb_tib3_CB180LMpredSUBwNOISE$CB180 ~ pcb_tib3_CB180LMpredSUBwNOISE$CB153)
+```
+
+We will now exclude the observations for which the value of CB180 is censored and fit a linear model and compare with our previous results.  The resulting fitted model has coefficients (-1.242473, 1.054756) and Adjusted-R-squared = 0.843; these coefficients are then used to make predictions, which are substituted and then the linear model is fit as above.  The resulting fitted model has coefficients (-1.240961, 1.056237) and Adjusted-R-squared = 0.864.
+
+```{r chunk15}
+# noise <- rnorm(4984)
+pcb_tib3_CB180lmEXCLUDE <- pcb_tib3 %>%
+  filter( CB180 > 0  ) %>%
+  mutate(CB153 = log(CB153)) %>%
+  mutate(CB180 = log(CB180))
+tib3_CB180lmEXCLUDE <- lm(pcb_tib3_CB180lmEXCLUDE$CB180 ~ pcb_tib3_CB180lmEXCLUDE$CB153)
+summary(tib3_CB180lmEXCLUDE)
+plot(pcb_tib3_CB180lmEXCLUDE$CB180 ~ pcb_tib3_CB180lmEXCLUDE$CB153)
+```
+
+```{r chunk16}
+pcb_tib3_CB180lmEXCLUDE_predSUBwNOISE <- pcb_tib3 %>%
+  filter( !( is.na(CB180) ) ) %>%
+  mutate(CB153 = log(CB153) ) %>%
+  mutate(NOISE = 0.4*rnorm(4984)) %>%
+  mutate(CB180 = ifelse(CB180<= 0, -1.242473 + 1.054756*CB153+NOISE, log(CB180) ) ) 
+tib3_CB180lmEXCLUDE_predSUBwNOISE <- lm(pcb_tib3_CB180lmEXCLUDE_predSUBwNOISE$CB180 ~ pcb_tib3_CB180lmEXCLUDE_predSUBwNOISE$CB153)
+summary(tib3_CB180lmEXCLUDE_predSUBwNOISE)
+plot(pcb_tib3_CB180lmEXCLUDE_predSUBwNOISE$CB180 ~ pcb_tib3_CB180lmEXCLUDE_predSUBwNOISE$CB153)
+```
+
+In summary, three main approaches were tried: exclusion; substitution; use of cenreg().  Sub-approaches that were tried were: using substitution with predicted values with or without noise; iterative prediction, mutation, fitting.   The coefficients of the fitted model and the Adjusted-R-squared values were recorded in each case and found to have similar values across all approaches.  For the cenreg() method, the value of likelihood-r was reported and its squared value was found to be very similar to the Adjusted R-squared values from the other approaches.
+
+Our next goal is to further develop the simulation study to make it more meaningful in relation to our dataset of interest.
+
+
+
