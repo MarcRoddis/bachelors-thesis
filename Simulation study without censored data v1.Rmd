@@ -1,0 +1,128 @@
+---
+title: "Simulation study without censored data v1"
+author: "Marc Roddis"
+date: "2/16/2020"
+output: github_document
+---
+
+### Preliminary simulation study without censored data
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+In our document entitled "Exploratory data analysis looking for evidence of confounding" we found that y=CB153, x=CB138 fit a linear model y = 0.04  + 0.93x with "Adjusted R-squared" = 0.971 and 3267 degrees of freedom.  We will now create a set of three simulated datasets, which each contain 3269 (this value is chosen so that we get 3267 degrees of freedom) ordered pairs (x, y_k), where `x` is  a vector of realisations `rnorm()` from a standard normal distribution, and y_k = 0.04  + 0.93x + "noise", where "noise" = k * `rnorm()`, and each (y_1, y_2, y_3) are characterised by (k=0.1, k=0.2, k=0.3) respectively.   Viewing each of the fitted models as y_k = alpha_k + x * beta_k, we see from the summary output below that very similar values of alpha_k and beta_k were obtained by fitting these three models.  However, the value of k affected the value of "Adjusted R-squared" in the manner intended, giving values (0.99, 0.95, 0.90) for  (k=0.1, k=0.2, k=0.3) respectively.
+
+
+
+
+
+
+```{r chunk2}
+x <- rnorm(3269)
+y_1 <- 0.04 + 0.93*x + 0.1*rnorm(3269)
+y_2 <- 0.04 + 0.93*x + 0.2*rnorm(3269)
+y_3 <- 0.04 + 0.93*x + 0.3*rnorm(3269)
+plot(x,y_1)
+plot(x,y_2)
+plot(x,y_3)
+lm_fit1 <- lm(y_1 ~ x)
+lm_fit2 <- lm(y_2 ~ x)
+lm_fit3 <- lm(y_3 ~ x)
+summary(lm_fit1)
+summary(lm_fit2)
+summary(lm_fit3)
+```
+
+We will base our simulation methodology upon the exploratory work described above by choosing values for alpha, beta and k to correspond to those obtained from fitting a linear model to the relevant part of the dataset in each instance.
+
+We will now continue with `lm_fit2` and introduce methods described in Chapter 11 of Helsel's book to deal with censored data for different values of LOQ (level of quantification).   We will first learn how to do this by  installing the "NADA for R" package and attempting to reproduce some of the results described in Helsel's book (which is referred to by page number from now on).
+
+### Attempt to reproduce Helsel's results using the "NADA for R" package
+
+```{r chunk3, include=FALSE}
+library("NADA")
+library("interval") #error: package ‘Icens’ required by ‘interval’ not found
+library("vegan")
+library("MASS")
+data (ShePyrene)
+attach(ShePyrene)
+```
+
+We begin by glimpsing the dataset `ShePyrene` from page 299.
+
+```{r chunk4}
+# head(ShePyrene)
+```
+
+We will now use the functions from page 301 "14.2.5 Correlation and Regression for Censored Data".  Attempting to reproduce the results from page 228 resulted in an error message.
+
+```{r chunk5}
+# data(DFe) # This code chunk is pasted from page 228 and causes an error
+# attach(DFe)
+# names(DFe)
+# DFeReg=cenreg(Cen(Summer, SummerCen)~Year, dist="gaussian")
+# DFeReg
+```
+
+### Comparison of the strength of association when including or excluding censored values when fitting the linear model (proportion of censored values = 0.0022)
+
+We begin by creating `pcb_tib3` (see "Cleaning the pcb dataset" for documentation), which has 5028 observations.  In this tibble CB138 and CB153 have no missing values, and CB153 has no censored values whereas CB138 has 11 censored values.
+
+```{r chunk5b, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+pcb_tib1 <- pcb_tib %>%  
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< -8, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< -8, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< -8, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< -8, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< -8, NA, CB180) ) 
+pcb_tib2 <- pcb_tib1 %>%
+  filter(!is.na(CB153))
+pcb_tib3 <- pcb_tib2 %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52> -0.0001 & CB52< 0.0001, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101> -0.0001 & CB101< 0.0001, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118> -0.0001 & CB118< 0.0001, NA, CB118) ) %>%
+  mutate(CB180 = ifelse(CB180> -0.0001 & CB180< 0.0001, NA, CB180) )
+```
+
+We will now add the variable CI138 and denote the resulting tibble as `pcb_tib3_CI138`.  CI138 is a censoring indicator for CB138; it is TRUE for censored observations (and FALSE for uncensored).  We then use the cenreg() function on `pcb_tib3_CI138` in accordance with page 301.   Contrary to my expectation, the likelihood-r value (which gives a measure of the degree of association) is higher (which means stronger association) when cenreg() uses a gaussian distribution than when cenreg() uses a log-normal distribution, despite the fact that the variables CB153 and CB138 themselves have (approximate) log-normal distributions; the likelihood-r values are (0.965, 0.768) for dist=(gaussian, log-normal) respectively.
+
+```{r chunk6}
+pcb_tib3_CI138 <- pcb_tib3 %>%
+  mutate(CI138= CB138<0) %>%
+  mutate(CB138 = ifelse(CB138< 0, abs(CB138), CB138) ) 
+# data(pcb_tib3_CI138)
+# attach(pcb_tib3_CI138)
+tib3_cenreg=cenreg(Cen(pcb_tib3_CI138$CB138, pcb_tib3_CI138$CI138)~pcb_tib3_CI138$CB153, dist="gaussian")
+tib3_cenreg
+tib3_cenreg2=cenreg(Cen(pcb_tib3_CI138$CB138, pcb_tib3_CI138$CI138)~pcb_tib3_CI138$CB153)
+tib3_cenreg2
+# attach(pcb_tib4)
+# test1_cenreg=cenreg(Cen(Summer, SummerCen)~Year, dist="gaussian")
+```
+
+We will now replace CB138 and CB153 with the logarithm of their values and denote the resulting tibble as `pcb_tib3_CI138_prelog`.  We will then apply cenreg() using gaussian and log-normal distributions (as we did previously).  The likelihood-r values are (0.978, 0.768) for dist=(gaussian, log-normal) respectively.
+
+```{r chunk7}
+pcb_tib3_CI138_prelog <- pcb_tib3_CI138 %>%
+  mutate(CB138 = log(CB138) ) %>%
+  mutate(CB153 = log(CB153) ) 
+tib3_cenreg_prelog=cenreg(Cen(pcb_tib3_CI138_prelog$CB138, pcb_tib3_CI138_prelog$CI138)~pcb_tib3_CI138_prelog$CB153, dist="gaussian")
+tib3_cenreg_prelog
+tib3_cenreg2_prelog=cenreg(Cen(pcb_tib3_CI138$CB138, pcb_tib3_CI138$CI138)~pcb_tib3_CI138$CB153)
+tib3_cenreg2_prelog
+```
+
+Although we do not yet understand the above unexpected results, we did get the highest likelihood-r value by using dist=gaussian on the logarithmed data, which is the way I had intended to do it all along.   We will therefore proceed as we had intended.  We begin by comparing the likelihood-r = 0.978 value with the Adjusted-R-squared=0.957 value we obtained in our document "Cleaning the pcb dataset"; squaring 0.978 gives 0.956, so these values are very similar.  We expected this similarity because only 11 of 5028 values were censored so the proportion of censored values was 0.0022 (which is very low).  
+
+### Comparison of the strength of association when including or excluding censored values when fitting the linear model (proportion of censored values > 0.0022)
+
+We will repeat the process described in the previous section, except that we will now use CB180 as the response variable because CB180 has only 23 missing values but 578 censored values.  This means that we can remove the observations for which the CB180 value is missing, which will mean that this comparison corresponds to that of the previous section with the sole exception that the proportion of censored values is much higher (0.115).

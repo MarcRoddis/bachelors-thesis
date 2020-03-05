@@ -1,0 +1,250 @@
+---
+title: "CB28 and CB52 vs YEAR trend for various augmented substituted or filtered datasets"
+author: "Marc Roddis"
+date: "3/5/2020"
+output: github_document
+---
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+library(mice)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+In the first section of this document we focus on CB28 because this variable has the largest number of censored values.  In the second section, we focus on CB52 because this variable has the largest number of missing values.  In the third section we focus on CB153 because it has no missing values.
+
+### Analysis of the trend CB28 vs YEAR
+
+#### Creation and trend analysis for the `CB28_filtered` dataset
+
+We show below a scatter plot and fitted linear model summary for CB28 versus YEAR from `CB28_filtered`; this dataset was created by removal of censored values.  The fitted linear model has na.omit as the na.action by default; the slope coefficient is -0.0346; SE = 0.0015;  p-value < 2e-16; Adjusted R-squared = 0.18.
+
+```{r chunk1b, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+CB28_filtered <- pcb_tib %>%
+  select(CB28, YEAR) %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  # the line above re-codes 360 zero values as NA 
+  filter(CB28 > 0) %>%
+  mutate(CB28 = round(log(CB28),4) )
+```
+
+```{r chunk1c}
+attach(CB28_filtered)
+plot(CB28 ~ YEAR)
+CB28_filtered_fit <- lm(CB28 ~ YEAR)
+summary(CB28_filtered_fit)
+```
+
+### Time trend analysis of CB28 versus YEAR from `vB1` and `completed_vB1`
+
+These datasets were created in our document "Imputation based on van Buuren's book".  We show below a scatter plot and fitted linear model summary for CB28 versus YEAR from `completed_vB1`.  We see that the slope coefficient is -0.0440 with SE = 0.0009 and p-value < 2e-16; Adjusted R-squared = 0.31.
+
+```{r chunk2, include=FALSE}
+# creation of the vB1 and completed_vB1 tibbles
+# pcb_df <- read_csv("pcb.csv")
+# pcb_tib <- as_tibble(pcb_df)
+pcb_tib1 <- pcb_tib %>%  
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< -8, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< -8, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< -8, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< -8, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< -8, NA, CB180) ) 
+pcb_tib2 <- pcb_tib1 %>%
+  filter(!is.na(CB153))
+pcb_tib3 <- pcb_tib2 %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52> -0.0001 & CB52< 0.0001, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101> -0.0001 & CB101< 0.0001, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118> -0.0001 & CB118< 0.0001, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138> -0.0001 & CB138< 0.0001, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153> -0.0001 & CB153< 0.0001, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180> -0.0001 & CB180< 0.0001, NA, CB180) )
+pcbtib_I1_pre1 <- pcb_tib3 %>%
+  mutate(CB28 = ifelse(CB28< 0, abs(CB28)/sqrt(2), CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< 0, abs(CB52)/sqrt(2), CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< 0, abs(CB101)/sqrt(2), CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< 0, abs(CB118)/sqrt(2), CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< 0, abs(CB138)/sqrt(2), CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< 0, abs(CB153)/sqrt(2), CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< 0, abs(CB180)/sqrt(2), CB180) ) 
+vB1 <- pcbtib_I1_pre1 %>%
+  mutate(CB28 = round(log(CB28),4) ) %>%
+  mutate(CB52 = round(log(CB52),4) ) %>%
+  mutate(CB101 = round(log(CB101),4) ) %>%
+  mutate(CB118 = round(log(CB118),4) ) %>%
+  mutate(CB138 = round(log(CB138),4) ) %>%
+  mutate(CB153 = round(log(CB153),4) ) %>%
+  mutate(CB180 = round(log(CB180),4) ) 
+pred <- quickpred(vB1, minpuc = 0.5)
+qpred1 <- mice(vB1, pred = pred, seed = 29725)
+completed_vB1 <- complete(qpred1)
+```
+
+```{r chunk2b}
+# This code chunk also shows that na.omit is the default na.action
+attach(completed_vB1)
+plot(CB28 ~ YEAR)
+completed_vB1_CB28_YEAR_fit <- lm(CB28 ~ YEAR)
+summary(completed_vB1_CB28_YEAR_fit)
+completed_vB1_CB28_YEAR_NAomit_fit <- lm(CB28 ~ YEAR, na.action = na.omit)
+summary(completed_vB1_CB28_YEAR_NAomit_fit)
+``` 
+
+We now show a scatter plot and fitted linear model summary for CB28 versus YEAR from `vB1`.  We see that the slope coefficient is -0.0427 with SE = 0.0010 and p-value < 2e-16; Adjusted R-squared = 0.29.
+
+```{r chunk3}
+attach(vB1)
+plot(CB28 ~ YEAR)
+vB1_CB28_YEAR_fit <- lm(CB28 ~ YEAR)
+summary(vB1_CB28_YEAR_fit)
+``` 
+
+### Analysis of the trend CB52 vs YEAR
+
+#### Creation and trend analysis for the `CB52_filtered` dataset
+
+We show below a scatter plot and fitted linear model summary for CB52 versus YEAR from `CB52_filtered`; this dataset was created by removal of censored values.  The fitted linear model has na.omit as the na.action by default; the slope coefficient is -0.0485; SE = 0.0014;  p-value < 2e-16; Adjusted R-squared = 0.26.
+
+```{r chunk4, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+CB52_filtered <- pcb_tib %>%
+  select(CB52, YEAR) %>%
+  mutate(CB52 = ifelse(CB52> -0.0001 & CB52< 0.0001, NA, CB52) ) %>%
+  filter(CB52 > 0)  %>%
+  mutate(CB52 = round(log(CB52),4) )
+```
+
+```{r chunk5}
+attach(CB52_filtered)
+plot(CB52 ~ YEAR)
+CB52_filtered_fit <- lm(CB52 ~ YEAR)
+summary(CB52_filtered_fit)
+```
+
+### Time trend analysis of CB52 versus YEAR from `vB1` and `completed_vB1`
+
+These datasets were created in our document "Imputation based on van Buuren's book".  We show below a scatter plot and fitted linear model summary for CB52 versus YEAR from `completed_vB1`.  We see that the slope coefficient is -0.0547 with SE = 0.0013 and p-value < 2e-16; Adjusted R-squared = 0.27.
+
+```{r chunk6}
+attach(completed_vB1)
+plot(CB52 ~ YEAR)
+completed_vB1_CB52_YEAR_fit <- lm(CB52 ~ YEAR)
+summary(completed_vB1_CB52_YEAR_fit)
+``` 
+
+We now show a scatter plot and fitted linear model summary for CB52 versus YEAR from `vB1`.  We see that the slope coefficient is -0.0576 with SE = 0.0014 and p-value < 2e-16; Adjusted R-squared = 0.29.
+
+```{r chunk7}
+attach(vB1)
+plot(CB52 ~ YEAR)
+vB1_CB52_YEAR_fit <- lm(CB52 ~ YEAR)
+summary(vB1_CB52_YEAR_fit)
+``` 
+
+### Analysis of the trend CB153 vs YEAR
+
+#### Creation and trend analysis for the `CB153_filtered` dataset
+
+We show below a scatter plot and fitted linear model summary for CB153 versus YEAR from `CB153_filtered`; this dataset was created by removal of censored values.  Since this variable has no missing values it is identical for `CB153_filtered`, `vB1` and `completed_vB1`; the slope coefficient is -0.0413; SE = 0.0016;  p-value < 2e-16; Adjusted R-squared = 0.12.
+
+```{r chunk8, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+CB153_filtered <- pcb_tib %>%
+  select(CB153, YEAR) %>%
+  filter(CB153 > 0)  %>%
+  mutate(CB153 = round(log(CB153),4) )
+```
+
+```{r chunk9}
+attach(CB153_filtered)
+plot(CB153 ~ YEAR)
+CB153_filtered_fit <- lm(CB153 ~ YEAR)
+summary(CB153_filtered_fit)
+```
+
+
+### Preliminary conclusions
+
+For every fitted model above the p-value was less than 2e-16, so the significance of the slope coefficient does not allow us to distinguish between the alternatives explored above, so we will focus solely on the degree of associated as indicated by the R-squared values.   
+
+For CB28 vs YEAR, these values were (0.18, 0.31, 0.29) for (CB28_filtered, completed_vB1, vB1) respectively.  
+
+For CB52 vs YEAR, these values were (0.26, 0.27, 0.29) for (CB52_filtered, completed_vB1, vB1) respectively.
+
+For CB153 vs YEAR the value was (0.12, 0.12, 0.12) because this variable is identical in these three datasets.
+
+The number of observations in (CB28_filtered, CB52_filtered, CB153_filtered, completed_vB1, vB1) is (2281, 3234, 5028, 5028, 5028) respectively.   
+
+We see that CB153 has the lowest R-squared value.  This is as we may have conjectured since this there are no censored values to substitute (using LOQ/sqrt(2)), so variance is not artificially reduced in this manner.  However, CB28 has more censored values than CB52 and a higher R-squared value, which constitutes evidence against this conjecture.  
+
+Comparing CB28 and CB52: we see that the `CB28_filtered` dataset has the fewest observations and resulted in the lowest R-squared value.   We also see that the R-squared values for `vB1` and `completed_vB1` are very similar (in fact, equal on average); recall that these datasets both have censored values substituted by LOQ/sqrt(2) and differ only in the fact that the NA values in vB1 are substituted by values generated by multiple imputation from the mice() algorithm.   Concretely, the number of NA values in vB1 for (CB28, CB52) is (631, 565) respectively, whereas there are no NA values in completed_vB1.
+
+### Comparison of the strength of association between x=YEAR and y=CB28 by application of exclusion, regression imputation, and use of cenreg() to censored values
+
+We will use a streamlined version of the methodology described in our document "Preliminary studies of censored data" 
+
+From the below output, we see that the value of likelihood-r for `tib3_cenreg_28` was 0.425 (and 0.425^2=0.181).
+
+```{r chunk10}
+pcb_tib3_CB28CI <- pcb_tib3 %>%
+  filter( !( is.na(CB28) ) ) %>%
+  mutate(CI28 = CB28 < 0) %>%
+  mutate(CB28 = ifelse(CB28< 0, abs(CB28), CB28) ) %>%
+  mutate(CB28 = log(CB28))
+# attach(pcb_tib3_CB28CI)
+library("NADA")
+tib3_cenreg_28 = cenreg(Cen(pcb_tib3_CB28CI$CB28, pcb_tib3_CB28CI$CI28)~ pcb_tib3_CB28CI$YEAR, dist="gaussian")
+tib3_cenreg_28
+plot(pcb_tib3_CB28CI$CB28 ~ pcb_tib3_CB28CI$YEAR)
+```
+
+We will now use the methodology documented in "Cleaning the pcb dataset" to substitute the CB28 censored values with values predicted by the regression equation of the linear model `vB1_CB28_YEAR_fit` described above.
+
+We get Adjusted R-squared =  0.384, which is slightly higher than resulted from the method of the previous section.  However, this is as we expected because substitution using predicted values has given plotted points that lie on the regression line so the increase in R-squared is at the expense of unrealistic alignment of the substituted points.   See our document "Preliminary studies of censored data" to see how such alignment can be eliminated by the addition of noise. 
+
+```{r chunk12}
+pcb_tib3_CB28LMpredSUB1 <- pcb_tib3 %>%
+  filter( !( is.na(CB28) ) ) %>%
+  mutate(CB28 = ifelse(CB28<= 0, 80.2024 - 0.0427*YEAR, log(CB28) ) ) 
+tib3_CB28LMpredSUB1 <- lm(pcb_tib3_CB28LMpredSUB1$CB28 ~ pcb_tib3_CB28LMpredSUB1$YEAR)
+summary(tib3_CB28LMpredSUB1)
+plot(pcb_tib3_CB28LMpredSUB1$CB28 ~ pcb_tib3_CB28LMpredSUB1$YEAR)
+```
+
+We will now exclude the observations for which the value of CB28 is censored and fit a linear model and compare with our previous results.  The resulting fitted model has coefficients (64.0360, -0.0346) and Adjusted-R-squared = 0.180; these coefficients are then used to make predictions, which are substituted and then the linear model is fit as above.  The resulting fitted model has coefficients (67.17611, -0.03615) and Adjusted-R-squared = 0.328.
+
+```{r chunk17}
+# noise <- rnorm(sample-size)
+pcb_tib3_CB28lmEXCLUDE <- pcb_tib3 %>%
+  filter( CB28 > 0  ) %>%
+  mutate(CB28 = log(CB28))
+tib3_CB28lmEXCLUDE <- lm(pcb_tib3_CB28lmEXCLUDE$CB28 ~ pcb_tib3_CB28lmEXCLUDE$YEAR)
+summary(tib3_CB28lmEXCLUDE)
+plot(pcb_tib3_CB28lmEXCLUDE$CB28 ~ pcb_tib3_CB28lmEXCLUDE$YEAR)
+```
+
+```{r chunk18}
+pcb_tib3_CB28lmEXCLUDE_predSUB <- pcb_tib3 %>%
+  filter( !( is.na(CB28) ) ) %>%
+  mutate(CB28 = ifelse(CB28<= 0, 64.0360 - 0.0346*YEAR, log(CB28) ) ) 
+tib3_CB28lmEXCLUDE_predSUB <- lm(pcb_tib3_CB28lmEXCLUDE_predSUB$CB28 ~ pcb_tib3_CB28lmEXCLUDE_predSUB$YEAR)
+summary(tib3_CB28lmEXCLUDE_predSUB)
+plot(pcb_tib3_CB28lmEXCLUDE_predSUB$CB28 ~ pcb_tib3_CB28lmEXCLUDE_predSUB$YEAR)
+```
+
+In summary, three main approaches were tried: exclusion; substitution using regression imputation; use of cenreg().  The adjusted-R-squared values were reported for each case and found to have similar values when exclusion and regression imputation were used.  However, for the cenreg() method, the value of likelihood-r was reported and its squared value was found to be lower than the adjusted R-squared values from the other approaches.   Weaker association after using cenreg() was not found in our document "Preliminary studies of censored data"; our preliminary explanation is to attribute this relative failure here to the larger proportion of censored data for the CB28 variable than for the variables used in our previous document. 
+
+
+
+
+
+
+

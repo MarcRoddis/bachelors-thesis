@@ -1,0 +1,152 @@
+---
+title: "Imputation based on van Buurens book First Attempt"
+author: "Marc Roddis"
+date: "2/26/2020"
+output: github_document
+---
+
+### Creation of the dataset `vB1` to do imputations on
+  
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+library(mice)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+We create `pcb_tib1`, `pcb_tib2`, and `pcb_tib3` using the same code as we used in "Preliminary studies of censored data".  We then create the tibble `vB1`, which will serve as the starting point for our imputation studies based upon the first edition of Van Buuren's book "Flexible Imputation of Missing Data"; this tibble `vB1` has all missing values coded as "NA", all censored values C substituted with abs(C)/sqrt(2), and all concentrations substituted with their log-values.  We will begin by reproducing basic approaches from Chapter 1.
+
+```{r chunk2, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+pcb_tib1 <- pcb_tib %>%  
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< -8, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< -8, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< -8, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< -8, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< -8, NA, CB180) ) 
+pcb_tib2 <- pcb_tib1 %>%
+  filter(!is.na(CB153))
+pcb_tib3 <- pcb_tib2 %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52> -0.0001 & CB52< 0.0001, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101> -0.0001 & CB101< 0.0001, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118> -0.0001 & CB118< 0.0001, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138> -0.0001 & CB138< 0.0001, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153> -0.0001 & CB153< 0.0001, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180> -0.0001 & CB180< 0.0001, NA, CB180) )
+pcbtib_I1_pre1 <- pcb_tib3 %>%
+  mutate(CB28 = ifelse(CB28< 0, abs(CB28)/sqrt(2), CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< 0, abs(CB52)/sqrt(2), CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< 0, abs(CB101)/sqrt(2), CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< 0, abs(CB118)/sqrt(2), CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< 0, abs(CB138)/sqrt(2), CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< 0, abs(CB153)/sqrt(2), CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< 0, abs(CB180)/sqrt(2), CB180) ) 
+vB1 <- pcbtib_I1_pre1 %>%
+  mutate(CB28 = round(log(CB28),4) ) %>%
+  mutate(CB52 = round(log(CB52),4) ) %>%
+  mutate(CB101 = round(log(CB101),4) ) %>%
+  mutate(CB118 = round(log(CB118),4) ) %>%
+  mutate(CB138 = round(log(CB138),4) ) %>%
+  mutate(CB153 = round(log(CB153),4) ) %>%
+  mutate(CB180 = round(log(CB180),4) ) 
+```
+
+The most basic approach is to use `na.action = na.omit` in `lm()` to perform listwise deletion.  A drawback of this approach is loss of information, for example we get "631 observations deleted due to missingness" for `CB28 ~ CB153` or 954 deleted for `CB28 ~ CB52`.  "If the data are MCAR, listwise deletion produces unbiased estimates of means, variances and regression weights. Under MCAR, listwise deletion produces standard errors and significance levels that are correct for the reduced subset of data, but that are often larger relative to all available data. A disadvantage of listwise deletion is that it is potentially wasteful. [...] If the data are not MCAR, listwise deletion can severely bias estimates of means, regression coefficients and correlations."  However, "There are cases in which listwise deletion can provide better estimates than even the most sophisticated procedures." (see Section 2.6).  Moreover, "Little and Rubin (2002) argue that it is difficult to formulate rules of thumb since the consequences of using listwise deletion depend on more than the missing data rate alone."
+
+```{r chunk3, include=FALSE}
+attach(vB1)
+fit1 <- lm(CB28 ~ CB153, data=vB1, na.action = na.omit)
+# summary(fit1)
+# deleted1 <- na.action(fit1)
+# naprint(deleted1)
+# fit2 <- lm(CB28 ~ CB52, data=vB1, na.action = na.omit)
+# summary(fit2)
+# deleted2 <- na.action(fit2)
+# naprint(deleted2)
+```
+
+#### Unsuitable methods 
+
+We will not use pairwise deletion since it is not generally applicable and falls outside the scope of this study, "Pairwise deletion should only be used if the procedure that follows it is specifically designed to take deletion into account."  We will instead focus on using various functions from the `mice` package for performing imputation in various ways.  
+
+We will not use mean imputation since "Mean imputation is a fast and simple fix for the missing data. However, it will underestimate the variance, disturb the relations between variables, bias almost any estimate other than the mean and bias the estimate of the mean when data are not MCAR. Mean imputation should perhaps only be used as a rapid fix when a handful of values are missing, and it should be avoided in general."
+
+```{r chunk3b}
+# imp1 <- mice(vB1, method = "mean", m = 1, maxit = 1) #mean imputation
+# summary(imp1)
+```
+
+Regression imputation was used in our earlier report "Preliminary studies of censored data".  However, the scatter plots showed that the imputed data lay perfectly on the regression line.  Ad hoc addition of noise gave realistic looking scatter plots, however this report aims to use theory-based rather than ad hoc approaches whenever possible, so we will not explore regression imputation any further in this report.   
+
+The mice package allows us to perform theory based "Stochastic regression imputation" (see Section 3.2), which is a potential areas for further study later in this report.  However, this method also has the clear drawback that it can generate implausible values such as negative values.
+
+Based on what we have learnt so far, we view the other methods given by van Buuren on page 16 as outside the scope of our study.  We will instead focus our attention on van Buuren's recommendation "Multiple imputation".  Our first attempt fails to run.
+
+```{r chunk4}
+# This code fails to run
+# mi1 <- mice(vB1, seed = 1, print = FALSE) #multiple imputation page18
+# MIfit1 <- with(mi1, lm(CB28 ~ CB153))
+# MItab1 <- round(summary(pool(MIfit1)), 3)
+# MItab1
+```
+
+#### Multiple imputation (MI) using the `mice` algorithm
+
+For our second attempt at MI, we first the `quickpred()` function (see vB page 128 for the methodology used by `quickpred()`) and then perform multiple imputation using `mice()` and fill in the missing values with `complete()`.  The output below first compares CB28 from `vB1` (which has 631 missing values) with CB28 from `completed_vB1` (which has no missing values). Then linear models with all significant predictors are fitted for each PCB concentration from the `completed_vB1` dataset.  There are approximately 10 significant predictors for the fitted model for each PCB concentration.   Although trends in PCB concentration with time have been the main focus of reports based on datasets similar to this one, `YEAR` is not even significant for every PCB. 
+
+```{r chunk5, include=FALSE}
+pred <- quickpred(vB1, minpuc = 0.5)
+qpred1 <- mice(vB1, pred = pred, seed = 29725)
+completed_vB1 <- complete(qpred1)
+```
+
+```{r chunk6}
+plot(vB1$CB28 ~ vB1$CB153)
+plot(completed_vB1$CB28 ~ completed_vB1$CB153)
+completed_fit_28_153 <- lm(CB28 ~ CB153, data=completed_vB1)
+completed_fit1_CB28_all_sig_predictors <- lm(CB28 ~ YEAR + LAT + LONG + ALDR + TOTV + FPRC + CB52 + CB101 + CB118 + CB138 + CB153 + CB180, data=completed_vB1)
+completed_fit1_CB52_all_sig_predictors <- lm(CB52 ~ YEAR + LONG + ALDR + TOTV + FPRC + CB28 + CB101 + CB118 + CB138 + CB153 + CB180, data=completed_vB1)
+completed_fit1_CB101_all_sig_predictors <- lm(CB101 ~ YEAR + LAT + LONG + ALDR + FPRC + CB52 + CB28 + CB118 + CB138 + CB153 + CB180, data=completed_vB1)
+completed_fit1_CB118_all_sig_predictors <- lm(CB118 ~ ALDR + TOTV + FPRC + CB52 + CB101 + CB28 + CB138 + CB153 + CB180, data=completed_vB1)
+completed_fit1_CB138_all_sig_predictors <- lm(CB138 ~ YEAR + LAT + LONG + ALDR + CB52 + CB101 + CB118 + CB28 + CB153 + CB180, data=completed_vB1)
+completed_fit1_CB153_all_sig_predictors <- lm(CB153 ~ YEAR + LAT + LONG + ALDR + TOTV + FPRC + CB52 + CB101 + CB118 + CB138 + CB28 + CB180, data=completed_vB1)
+completed_fit1_CB180_all_sig_predictors <- lm(CB180 ~ LAT + LONG + ALDR + TOTV + FPRC + CB52 + CB101 + CB118 + CB138 + CB153 + CB28, data=completed_vB1)
+# sum(is.na(vB1$CB28))
+# sum(is.na(completed_vB1$CB28))
+summary(fit1)
+summary(completed_fit_28_153)
+summary(completed_fit1_CB28_all_sig_predictors)
+summary(completed_fit1_CB52_all_sig_predictors)
+summary(completed_fit1_CB101_all_sig_predictors)
+summary(completed_fit1_CB118_all_sig_predictors)
+summary(completed_fit1_CB138_all_sig_predictors)
+summary(completed_fit1_CB153_all_sig_predictors)
+summary(completed_fit1_CB180_all_sig_predictors)
+pred[c(12:15,18),] # Table showing predictors of PCB concentrations
+```
+
+My main motivation for fitting and viewing all the above linear model sumaries was to see whether the number of predictors was associated with the number of imputed values because I considered such an association to be plausible since this was clearly the case for linear regression imputation.  However, the summary output above shows that there is no such clear association, so this seems to be show an advantage of multiple imputation over regression imputation.  This is consistent with (vB page 128) "it may seem that imputation would artificially strengthen the relations of the complete data model, which would be clearly undesirable. If done properly however, this is not the case."
+
+Our next goal is to evaluate the quality of MI.  We will first evaluate MI as performed above, we will then perform a comparison of two main alternatives Joint Modeling (JM) and Fully Conditional Specification (FCS).  van Buuren concludes (page 121) "For general missing data patterns, both JM and FCS approaches can be used to impute multivariate missing data. JM is the model of choice if the data conform to the modeling assumptions because it has better theoretical properties.The FCS approach is much more flexible and allows for imputations close to the data. Lee and Carlin (2010) provide a comparison between both perspectives."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,113 @@
+---
+title: "Imputation methods from Harrells RMS book First attempt"
+author: "Marc Roddis"
+date: "2/16/2020"
+output: github_document
+---
+  
+### Preliminary studies of censored data
+  
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+library(rms)
+library(Hmisc)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+We create `pcb_tib1`, `pcb_tib2`, and `pcb_tib3` using the same code as we used in "Preliminary studies of censored data".  We then create `pcbtib_I1`, which will serve as the starting point for our imputation studies; this tibble has all missing values coded as "NA", all censored values C substituted with abs(C)/sqrt(2), and all concentrations substituted with their log-values.  We will perform imputation of NA values of `pcbtib_I1` using methods from Chapter 3 of Harrell's book.
+
+```{r chunk2, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+pcb_tib1 <- pcb_tib %>%  
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< -8, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< -8, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< -8, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< -8, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< -8, NA, CB180) ) 
+pcb_tib2 <- pcb_tib1 %>%
+  filter(!is.na(CB153))
+pcb_tib3 <- pcb_tib2 %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  mutate(CB52 = ifelse(CB52> -0.0001 & CB52< 0.0001, NA, CB52) ) %>%
+  mutate(CB101 = ifelse(CB101> -0.0001 & CB101< 0.0001, NA, CB101) ) %>%
+  mutate(CB118 = ifelse(CB118> -0.0001 & CB118< 0.0001, NA, CB118) ) %>%
+  mutate(CB138 = ifelse(CB138> -0.0001 & CB138< 0.0001, NA, CB138) ) %>%
+  mutate(CB153 = ifelse(CB153> -0.0001 & CB153< 0.0001, NA, CB153) ) %>%
+  mutate(CB180 = ifelse(CB180> -0.0001 & CB180< 0.0001, NA, CB180) )
+pcbtib_I1_pre1 <- pcb_tib3 %>%
+  mutate(CB28 = ifelse(CB28< 0, abs(CB28)/sqrt(2), CB28) ) %>%
+  mutate(CB52 = ifelse(CB52< 0, abs(CB52)/sqrt(2), CB52) ) %>%
+  mutate(CB101 = ifelse(CB101< 0, abs(CB101)/sqrt(2), CB101) ) %>%
+  mutate(CB118 = ifelse(CB118< 0, abs(CB118)/sqrt(2), CB118) ) %>%
+  mutate(CB138 = ifelse(CB138< 0, abs(CB138)/sqrt(2), CB138) ) %>%
+  mutate(CB153 = ifelse(CB153< 0, abs(CB153)/sqrt(2), CB153) ) %>%
+  mutate(CB180 = ifelse(CB180< 0, abs(CB180)/sqrt(2), CB180) ) 
+pcbtib_I1 <- pcbtib_I1_pre1 %>%
+  mutate(CB28 = round(log(CB28),4) ) %>%
+  mutate(CB52 = round(log(CB52),4) ) %>%
+  mutate(CB101 = round(log(CB101),4) ) %>%
+  mutate(CB118 = round(log(CB118),4) ) %>%
+  mutate(CB138 = round(log(CB138),4) ) %>%
+  mutate(CB153 = round(log(CB153),4) ) %>%
+  mutate(CB180 = round(log(CB180),4) ) 
+```
+
+Harrell (page 48) says "In general, observations should only be discarded if the MCAR assumption is justified, there is a rarely missing predictor of overriding importance that cannot be reliably imputed from other information, or if the fraction of observations excluded is very small and the original sample size is large. Even then, there is no advantage of such deletion other than saving analyst time. If a predictor is MAR but its missingness depends on Y , casewise deletion is biased."   In the context of this study, we know that the LOQ used to censor pcb concentrations is associated with `FPRC`, so these censored values are not censored completely at random (CCAR).   We should first investigate missing values to establish whether they are MCAR or not so that we can decide whether or not to delete these values in accordance with Harrell's guidance.
+
+We will first perform `aregImpute()` on `pcbtib_I1` (following page 56).  Link to aregImpute documentation https://www.rdocumentation.org/packages/Hmisc/versions/4.3-1/topics/aregImpute
+
+
+```{r chunk3, include=FALSE}
+a1 <- aregImpute (∼ CB28 + CB52 + CB101 + CB118 + CB138 + CB153 + CB180, data = pcbtib_I1 , n.impute =5)
+f1 <- fit.mult.impute (CB28 ∼ CB52 + CB101 + CB118 + CB138 + CB153 + CB180, ols, a1, data = pcbtib_I1 )
+sapply(f1, function(x)sum(is.imputed(x)))
+sapply(f1, function(x)sum(is.na(x)))
+# # f1_imputed <-impute.transcan(f1, data=pcbtib_I1, imputation=1, list.out=TRUE, pr=FALSE, check=FALSE)
+```
+
+I spent 6 hours trying to implement imputation in R but without success; the resulting dataset still contains NA values.
+
+```{r chunk 4}
+pcbtib_pcb1 <- pcbtib_I1 %>%
+  select(ACCNR, CB28:CB180)
+require(rms)
+attach(pcbtib_pcb1)
+ddist <- datadist(pcbtib_pcb1)
+options(datadist="ddist")
+CB28 <- impute(CB28)
+CB52 <- impute(CB52)
+CB101 <- impute(CB101)
+CB118 <- impute(CB118)
+CB138 <- impute(CB138)
+CB153 <- impute(CB153)
+CB180 <- impute(CB180)
+
+# attach(pcbtib_pcb1)
+# pcb_trans1 <- transcan(pcbtib_pcb1, data=pcbtib_pcb1, imputed=TRUE, shrink=TRUE, n.impute=5, trantab=TRUE)
+# # attach(pcbtib_pcb1, use.names=FALSE)
+# # impute(pcb_t1, imputation=1)
+# # pcbtib_I1$CB28 <- impute(pcb_trans, pcbtib_I1$CB28)
+# 
+# 
+# pcbt1 <- transcan(~. , n.impute=5, data=pcbtib_pcb1)
+# pcb_imputed1 <- impute(pcbt1, imputation=1, data=pcbtib_pcb1,
+#                   list.out=TRUE, pr=FALSE, check=FALSE)
+# sapply(pcb_imputed1, function(x)sum(is.imputed(x)))
+# sapply(pcb_imputed1, function(x)sum(is.na(x)))
+```
+
+
+
+
+
+
+
+
+
+
+
