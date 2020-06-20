@@ -1,0 +1,66 @@
+---
+title: "Progres Update May 17th 2020"
+author: "Marc Roddis"
+date: "5/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In February and early March I wrote various documents which described preliminary, exploratory work.
+
+I took a one month break betwen March 7th and April 9th.  I then started writing a preliminary version of my main report entitled "Analysis of censored PCB data using regression imputation FV1", which contains the overall structure of my report.  
+
+I then began working primarily on this section "Calculation of good values for the fixed parameters beta_cb, sd_cb".  This work is as yet incomplete and is documented in "Multiple imputation after substitution with LOQ over sqrt2", "Preliminary studies using cenmle function", "Attempt to reproduce NADAforR Examples", "Multiple imputation for NA without substituted censored values".  My main problem was that I was unable to get cenmle() to work reliably.  I then started feeling ill and stressed and had to take a break, which caused me to lose my train of thought, which made it difficult for me to continue.   This document is an announcement that I am back and starting to feel better :)
+
+My next step is to side-step the technical problems I had with cenmle() by doing "Calculation of good values for the fixed parameters beta_cb, sd_cb" in a manner that I can get to work, based on successful work I did in February.  By simplifying this somewhat peripheral step, I will then be able to return to the core theme of designing and implementing my simulation study.   I could later refine the values of beta_cb and sd_cb, if necessary.
+
+By the way, I tried using MI followed by cenreg in my new document "Multiple imputation without substitution for censored values" but I could not get it to work.  So I will drop my MI work for now since I cannot get it to work and Martin did not find it relevant.  End of "by the way".
+
+Let's now summarise what was achieved in my earlier documents:
+
+In "Multiple imputation after substitution with LOQ over sqrt2" we arrived at the following conclusion: 
+
+"We used MI to replace NA values of CB28 with imputed values which allowed us to calculate the standard deviation of (the logarithm of) CB28 from the completed dataset.  We obtained the values (-0.044, -0.041, 0.66, 1.00) (beta_cb28, beta_cb153, sd_cb28, sd_cb153) respectively; these values are used to choose baseline parameter value for our simulation studies (see my document "Analysis of censored PCB data using regression imputation FV1", which is my main report)."
+
+# Progress with my main report
+
+The following documents have been incorporated into my main document:
+
+"Exploratory data analysis looking for evidence of confounding"
+
+"Multiple imputation after substitution with LOQ over sqrt2"
+
+"Cleaning the pcb dataset" (however, no part of the final section "Preliminary linear regression analysis" was incorporated).
+
+
+The following documents should be incorporated into my main document (not yet done):
+
+"Averaged CB28 and CB52 vs YEAR trend for various augmented substituted or filtered datasets"
+
+"CB28 and CB52 vs YEAR trend for various augmented substituted or filtered datasets"
+
+"Preliminary studies of censored data"
+
+"Simulation study without censored data v1"
+
+
+The following documents are borderline useful:
+
+"Preliminary studies using cenmle function"
+
+"Analysis of pcb_csv v1 testing md"
+
+The following documents are now obsolete:
+
+"Multiple imputation for NA without substituted censored values"
+
+The following documents gave no usable findings:
+
+"Imputation methods from Harrells RMS book (failed) First attempt"
+
+"Attempt to reproduce NADAforR Examples"
+
+
