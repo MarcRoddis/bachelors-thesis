@@ -1,0 +1,255 @@
+---
+title: "Simulation of imputation of censored values by linear regression"
+author: "Marc Roddis"
+date: "6/25/2020"
+output: html_document
+---
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+library(NADA)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+We will first create a test dataset `test_data1` from `pcb.csv` by omitting all missing values of `CB28` and `CB153`, removing all observations except those from herring species, removing all observations prior to 1989, re-indexing 1989 as "year zero", removing all variables except `YEAR`, `CB28` and `CB153`.
+
+```{r chunk2, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+testdata1 <- pcb_tib %>%
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  filter(!is.na(CB28)) %>%
+  filter(!is.na(CB153)) %>%
+  filter(SPECIES == "Herring") %>%
+  filter(YEAR >= 1989) %>%
+  mutate(YEAR = YEAR-1989) %>%
+  select(YEAR, CB28, CB153)
+```
+
+We now create `testdata_cen_omit` by omitting all censored observations and replacing concentrations with log-concentrations.
+
+```{r chunk3, include=FALSE}
+geomean <- function(x) round(exp(mean( log(x) ) ),4)
+testdata_cen_omit <- testdata1 %>%
+  filter(CB28>0) %>%
+  filter(CB153>0) %>%
+  group_by(YEAR) %>%
+  summarise_at(vars(CB28,CB153), geomean  ) %>%
+  ungroup()
+testdata_cen_omit_logconc <- testdata_cen_omit %>%
+  mutate(CB28 = log(CB28)) %>%
+  mutate(CB153 = log(CB153))
+```
+
+```{r chunk4}
+# attach(testdata_cen_omit)
+# glimpse(CB28)
+# glimpse(CB153)
+# glimpse(YEAR)
+# plot(CB28 ~ YEAR)
+# plot(CB153 ~ YEAR)
+# plot(CB28 ~ CB153)
+# summary(lm(CB28~YEAR))
+# summary(lm(CB153~YEAR))
+# summary(lm(CB28~CB153))
+```
+
+```{r chunk5}
+attach(testdata_cen_omit_logconc) # assume logconcs have normal distribution
+glimpse(CB28)
+glimpse(CB153)
+glimpse(YEAR) # 29 years indexed as 0:28
+plot(CB153 ~ YEAR)
+plot(CB28 ~ CB153)
+summary(lm(CB28~YEAR)) # -4.54 - 0.046*YEAR
+summary(lm(CB153~YEAR)) # -1.85 - 0.039*YEAR
+summary(lm(CB28~CB153)) # -3.12 + 0.86*CB153
+summary(lm(CB28~CB153+YEAR)) #  -3.60 + 0.51*CB153 - 0.026*YEAR
+
+sd(CB28) # 0.64
+sd(CB153) # 0.86
+quantile(CB28, probs=c(0.1,0.3,0.5,0.9) ) # (-5.76, -5.32, -5.22, -4.79)
+```
+
+
+```{r chunk10, include=FALSE}
+attach(testdata_cen_omit_logconc)
+# This simulation uses parameters from testdata_cen_omit_logconc
+LOQ_p10 <-  -5.76
+LOQ_p50 <-  -5.22
+LOQ_p90 <-  -4.79
+# sd28 <- 0.46
+residualSE28year <- 0.25
+alpha28year <- -4.54
+beta28year <- -0.046
+# alpha28year_se <- 
+# sd153 <- 0.46
+alpha153year <- -1.85
+beta153year <- -0.039
+residualSE153year <- 0.32
+alpha28_153 <- -3.12
+beta28_153 <- 0.86
+residualSE28_153 <- 0.25
+residualSE28_153plusYEAR <- 0.20
+
+year_sim <- rep(0:28, 100)
+# since CB153 has no missing values use NOISE + (CB153 ~ YEAR) to simulate CB153 
+cb153sim <- rnorm(2900) * residualSE153year + alpha153year + beta153year * year_sim 
+# use NOISE + (CB28 ~ CB153 + YEAR) to simulate CB28
+cb28sim <- rnorm(2900) * residualSE28year + alpha28year + beta28year * year_sim 
+
+cb28sim_cens_p10 <- pmax(cb28sim, LOQ_p10) #substitute C_i with LOQ_p10
+cb28sim_cens_p50 <- pmax(cb28sim, LOQ_p50) #substitute C_i with LOQ_p50
+cb28sim_cens_p90 <- pmax(cb28sim, LOQ_p90) #substitute C_i with LOQ_p90
+
+# vec_norm <- rnorm(2900)
+# cb28sim_pred_p10 <- ifelse(cb28sim == cb28sim_cens_p10,  cb28sim, sample(rnorm(2900),1)*0.2 -3.60 + 0.51*cb153sim - 0.026*year_sim) #substitute C_i with imputed values
+
+cb28sim_pred_p10 <- ifelse(cb28sim == cb28sim_cens_p10,  cb28sim, predict( lm(CB28~CB153+YEAR) ) )
+cb28sim_pred_p50 <- ifelse(cb28sim == cb28sim_cens_p50,  cb28sim, predict( lm(CB28~CB153+YEAR) ) )
+cb28sim_pred_p90 <- ifelse(cb28sim == cb28sim_cens_p90,  cb28sim, predict( lm(CB28~CB153+YEAR) ) )
+```
+
+```{r chunk11}
+testdata_cen_omit_logconc_tib <- as_tibble(testdata_cen_omit_logconc)
+
+ggplot(testdata_cen_omit_logconc_tib, aes(x=YEAR, y=CB28)) + 
+  geom_point() + 
+  ylim(-7,-3) 
+
+
+
+data_from_sim <- cbind(cb28sim, cb153sim, year_sim)
+tib_from_sim <- as_tibble(data_from_sim)
+tib_from_sim_mean <- tib_from_sim %>%
+  group_by(year_sim) %>%
+  summarise_at(vars(cb28sim, cb153sim), mean  ) %>%
+  ungroup()
+
+data_from_pred_p10 <- cbind(cb28sim_pred_p10, cb153sim, year_sim)  
+tib_from_pred_p10 <- as_tibble(data_from_pred_p10)
+tib_from_pred_p10_mean <- tib_from_pred_p10 %>%
+  group_by(year_sim) %>%
+  summarise_at(vars(cb28sim_pred_p10, cb153sim), mean  ) %>%
+  ungroup()  
+
+
+data_from_pred_p50 <- cbind(cb28sim_pred_p50, cb153sim, year_sim)  
+tib_from_pred_p50 <- as_tibble(data_from_pred_p50)
+tib_from_pred_p50_mean <- tib_from_pred_p50 %>%
+  group_by(year_sim) %>%
+  summarise_at(vars(cb28sim_pred_p50, cb153sim), mean  ) %>%
+  ungroup() 
+
+data_from_pred_p90 <- cbind(cb28sim_pred_p90, cb153sim, year_sim)  
+tib_from_pred_p90 <- as_tibble(data_from_pred_p90)
+tib_from_pred_p90_mean <- tib_from_pred_p90 %>%
+  group_by(year_sim) %>%
+  summarise_at(vars(cb28sim_pred_p90, cb153sim), mean  ) %>%
+  ungroup() 
+
+  
+  
+ggplot(tib_from_sim_mean, aes(x=year_sim, y=cb28sim)) + 
+  geom_point() + 
+  ylim(-7,-3) 
+
+
+# glimpse(cb28_pred_geomean)
+# ggplot(data = pcb_tib4m_utlaengan_he) + 
+#   geom_point(mapping = aes(x = CB138, y = CB153, color = YEAR))
+par( mfrow=(c(2,2) ) )
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$YEAR, ylim=c(-7,-3))
+plot(tib_from_sim_mean$cb28sim ~ tib_from_sim_mean$year_sim, ylim=c(-7,-3))
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$CB153, ylim=c(-7,-3))
+plot(tib_from_sim_mean$cb28sim ~ tib_from_sim_mean$cb153sim, ylim=c(-7,-3))
+
+
+par( mfrow=(c(2,2) ) )
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$YEAR, ylim=c(-7,-3))
+plot(tib_from_sim_mean$cb28sim ~ tib_from_sim_mean$year_sim, ylim=c(-7,-3))
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$CB153, ylim=c(-7,-3))
+plot(tib_from_sim_mean$cb28sim ~ tib_from_sim_mean$cb153sim, ylim=c(-7,-3))
+
+
+
+par( mfrow=(c(2,2) ) )
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$YEAR, ylim=c(-7,-3))
+plot(tib_from_pred_p10_mean$cb28sim_pred_p10 ~ tib_from_pred_p10_mean$year_sim, ylim=c(-7,-3))
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$CB153, ylim=c(-7,-3))
+plot(tib_from_pred_p10_mean$cb28sim_pred_p10 ~ tib_from_pred_p10_mean$cb153sim, ylim=c(-7,-3))
+
+
+par( mfrow=(c(2,2) ) )
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$YEAR, ylim=c(-7,-3))
+plot(tib_from_pred_p50_mean$cb28sim_pred_p50 ~ tib_from_pred_p50_mean$year_sim, ylim=c(-7,-3))
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$CB153, ylim=c(-7,-3))
+plot(tib_from_pred_p50_mean$cb28sim_pred_p50 ~ tib_from_pred_p50_mean$cb153sim, ylim=c(-7,-3))
+
+par( mfrow=(c(2,2) ) )
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$YEAR, ylim=c(-7,-3))
+plot(tib_from_pred_p90_mean$cb28sim_pred_p90 ~ tib_from_pred_p90_mean$year_sim, ylim=c(-7,-3))
+plot(testdata_cen_omit_logconc$CB28 ~ testdata_cen_omit_logconc$CB153, ylim=c(-7,-3))
+plot(tib_from_pred_p90_mean$cb28sim_pred_p90 ~ tib_from_pred_p90_mean$cb153sim, ylim=c(-7,-3))
+```
+
+Linear models for $(x,y)=(CB28,YEAR)$ and for $(x,y)=(CB28,CB153)$ respectively were each fitted to data with 10%, 50%, 90% censored observations substituted by imputed values, respectively.  The adjusted $R^{2}$ values decreased as the proportion of censored observations increased, which reflects the fact that the non-censored values were simulated whereas the censored values were predicted from the linear model that was fitted to the observed data.  
+
+```{r chunk12}
+
+tib_from_pred_p10_mean_cb28_year_fit <- lm(tib_from_pred_p10_mean$cb28sim_pred_p10 ~ tib_from_pred_p10_mean$year_sim)
+
+tib_from_pred_p10_mean_cb28_cb153_fit <- lm(tib_from_pred_p10_mean$cb28sim_pred_p10 ~ tib_from_pred_p10_mean$cb153sim)
+
+tib_from_pred_p50_mean_cb28_year_fit <- lm(tib_from_pred_p50_mean$cb28sim_pred_p50 ~ tib_from_pred_p50_mean$year_sim)
+
+tib_from_pred_p50_mean_cb28_cb153_fit <- lm(tib_from_pred_p50_mean$cb28sim_pred_p50 ~ tib_from_pred_p50_mean$cb153sim)
+
+tib_from_pred_p90_mean_cb28_year_fit <- lm(tib_from_pred_p90_mean$cb28sim_pred_p90 ~ tib_from_pred_p90_mean$year_sim)
+
+tib_from_pred_p90_mean_cb28_cb153_fit <- lm(tib_from_pred_p90_mean$cb28sim_pred_p90 ~ tib_from_pred_p90_mean$cb153sim)
+
+summary(tib_from_pred_p10_mean_cb28_year_fit)
+summary(tib_from_pred_p10_mean_cb28_cb153_fit)
+
+summary(tib_from_pred_p50_mean_cb28_year_fit)
+summary(tib_from_pred_p50_mean_cb28_cb153_fit)
+
+summary(tib_from_pred_p90_mean_cb28_year_fit)
+summary(tib_from_pred_p90_mean_cb28_cb153_fit)
+
+
+
+
+
+# plot(log(testdata1$CB28) ~ log(testdata1$CB153), ylim(-7,-3) )
+# plot(cb28sim ~ cb153sim, ylim(-7,-3))
+# quantile(cb28sim, probs=c(0.1,0.3,0.5) ) # (-5.76, -5.32, -5.22)
+# sd(cb28sim)
+# str(cb28sim)
+# str(cb28sim_cens_p10)
+# str(cb28sim_pred_p10)
+# sum(cb28sim==cb28sim_cens_p10)
+# sd(cb28sim_pred_p10)
+# str(cb28sim_cens_p50)
+# str(cb28sim_pred_p50)
+# sum(cb28sim==cb28sim_cens_p50)
+# sd(cb28sim_pred_p50)
+# str(cb28sim)
+# str(cb28sim_cens_p10)
+# str(cb28sim_pred_p10)
+
+
+```
+
+
+
+
+
+
+
+
