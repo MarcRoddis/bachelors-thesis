@@ -1,0 +1,267 @@
+---
+title: "Simulation of imputation of censored values for June 30th Zoom Call"
+author: "Marc Roddis"
+date: "6/29/2020"
+output: html_document
+---
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+library(gridExtra)
+library(cowplot)
+library("NADA")
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+### Finding appropriate simulation parameters from observed data
+
+We created the test dataset `testdata_cen_omit` from the original observed data `pcb.csv` by omitting all missing values of `CB28` and `CB153`, removing all observations except those from herring species, removing all observations prior to 1989, re-indexing 1989 as "year zero", removing all variables except `YEAR`, `CB28` and `CB153`, omitting all censored observations, and replacing concentrations with log-concentrations.
+
+```{r chunk2, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+testdata1 <- pcb_tib %>%
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  filter(!is.na(CB28)) %>%
+  filter(!is.na(CB153)) %>%
+  filter(SPECIES == "Herring") %>%
+  filter(YEAR >= 1989) %>%
+  mutate(YEAR = YEAR-1989) %>%
+  select(YEAR, CB28, CB153)
+```
+
+```{r chunk3, include=FALSE}
+geomean <- function(x) round(exp(mean( log(x) ) ),4)
+testdata_cen_omit <- testdata1 %>%
+  filter(CB28>0) %>%
+  filter(CB153>0) %>%
+  group_by(YEAR) %>%
+  summarise_at(vars(CB28,CB153), geomean  ) %>%
+  ungroup()
+testdata_cen_omit_logconc <- testdata_cen_omit %>%
+  mutate(CB28 = log(CB28)) %>%
+  mutate(CB153 = log(CB153))
+```
+
+Fitting linear models to the test data gave the following fixed parameters: $$CB28 = -4.54 - 0.046*YEAR$$ $$CB153 = -1.85 - 0.039*YEAR$$ $$CB28 = -3.12 + 0.86*CB153$$ $$sd(CB28)=0.46$$ $$sd(CB153)=0.46$$
+
+
+```{r chunk4}
+# attach(testdata_cen_omit_logconc) # assume logconcs have normal distribution
+# summary(lm(CB28~YEAR)) # -4.54 - 0.046*YEAR
+# summary(lm(CB153~YEAR)) # -1.85 - 0.039*YEAR
+# summary(lm(CB28~CB153)) # -3.12 + 0.86*CB153
+# summary(lm(CB28~CB153+YEAR)) #  -3.60 + 0.51*CB153 - 0.026*YEAR
+# sd(CB28) # 0.46
+# sd(CB153) # 0.46
+# quantile(CB28, probs=c(0.1,0.3,0.5,0.9) ) # (-5.76, -5.32, -5.22, -4.79)
+```
+
+#### Simulation and model fitting assuming no censored values
+
+These fixed parameters were used to generate the dataset `data_geomean2` as follows:
+
+12 values for the log-concentration of CB153 per year, for ten years, were generated and denoted as `cb153sim`.
+
+From every such CB153 value, the corresponding value for CB28 was generated.
+
+Annual geometric means for CB28 and CB153 concentrations were generated. 
+
+
+We will first fit a linear model to `data_geomean2`, assuming no censored values; this model `best_fit` is the gold standard against which will will later evaluate our three methods for dealing with censored values: omission, substitution, imputation from cenreg().  We will also test each method at various LOQ values:  For each method, at each LOQ value, we will fit the corresponding linear model and compute the mse, squared-bias, and variance, for each year separately.   We will then use these results to evaluate these three methods.
+
+The code chunk below generates `data_geomean2` for 1000 iterations, fits a linear model `best_fit` at each iteration, and computes the corresponding mse, squared-bias and variance.
+
+```{r chunk10e, include=FALSE}
+n_iter <- 1000
+set.seed(1)
+years <- c(0:9)
+geomean_prelogged <- function(x) exp(mean(x, na.rm = TRUE))
+
+get_sim_data_best = function(sample_size=12) { 
+  noise153 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  noise28 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  year = rep(years, sample_size)
+  cb153 = -1.85 - 0.039 * year + noise153
+  cb28 = -3.12 + 0.86*cb153 + noise28
+  df = data.frame(year,cb28,cb153)
+  data_tib2 = as_tibble(df)
+  data_geomean2 <- data_tib2 %>%
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+    ungroup()
+  data_geomean2
+}
+
+estimates_best <- matrix(0, nrow = 10, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+
+  # simulate new, random, training data
+  # this is the only random portion of the bias, var, and mse calculations
+  # this allows us to calculate the expectation over the data
+
+  sim_data_best <- get_sim_data_best(sample_size=12)
+  best_fit = lm(sim_data_best$cb28 ~ sim_data_best$year)
+  estimates_best[, iter] = predict(best_fit)
+  data.frame(estimates_best)
+}
+
+best_annual_concs <-  exp(-4.711 - 0.03354 * years)
+best_annual_means_n_iter <- rep(best_annual_concs, n_iter)
+best_annual_means_matrix <- matrix(best_annual_means_n_iter, nrow=10, ncol=n_iter)
+best_residuals_df <- data.frame(estimates_best - best_annual_means_matrix)
+
+g = function(x) {
+  mean(x^2)
+}
+
+best_mse_vector <- apply(best_residuals_df, 1, g)
+best_mse_df <- data.frame(best_mse_vector)
+estimates_best_mean = apply(estimates_best, 1, mean)
+best_bias_sq_vector = (estimates_best_mean - best_annual_concs)^2
+best_bias_sq_df = data.frame((best_bias_sq_vector))
+best_variance_vector = apply(estimates_best, 1, var)
+best_variance_df = data.frame(best_variance_vector)
+best_mse_bias_sq_var_matrix = matrix(0, nrow = 10, ncol=3)
+best_mse_bias_sq_var_matrix[,1] <- best_mse_vector
+best_mse_bias_sq_var_matrix[,2] <- best_bias_sq_vector
+best_mse_bias_sq_var_matrix[,3] <- best_variance_vector
+best_mse_bias_sq_var_df <- data.frame(best_mse_bias_sq_var_matrix)
+colnames(best_mse_bias_sq_var_df) <- c("mse_best","bias_best","variance_best")
+best_mse_bias_sq_var_df
+
+```
+
+#### Simulation and model fitting after omitting censored values
+
+We now generate the dataset `data_omit_geomean` from the fixed parameters as follows:
+
+12 values for the log-concentration of CB153 per year, for ten years, were generated and denoted as `cb153sim`.
+
+From every such CB153 value, the corresponding value for CB28 was generated.
+
+The 10th percentile for CB28 was used as the level of quantification `LOQ_p10`.
+
+Observations with CB28 < LOQ_p10 were removed from the dataset.
+
+Annual geometric means for CB28 and CB153 concentrations were generated. 
+
+The code chunk below generates `data_omit_geomean` for 1000 iterations, fits a linear model `omit_fit` at each iteration, and computes the corresponding mse, squared-bias and variance.
+
+```{r chunk10e2a, include=FALSE}
+
+get_sim_data_p10_omit = function(sample_size=12) { 
+  noise153 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  noise28 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  year = rep(years, sample_size)
+  cb153 = -1.85 - 0.039 * year + noise153
+  cb28 = -3.12 + 0.86*cb153 + noise28
+  LOQ_p10 = quantile(cb28, probs= 0.1)
+  df = data.frame(year,cb28,cb153)
+  data_omit_tib = as_tibble(df)
+  data_omit_geomean <- data_omit_tib %>%
+    filter(cb28 >= LOQ_p10) %>%
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+    ungroup()
+  data_omit_geomean
+}
+
+estimates_omit <- matrix(0, nrow = 10, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+
+  # simulate new, random, training data
+  # this is the only random portion of the bias, var, and mse calculations
+  # this allows us to calculate the expectation over the data
+
+  sim_omit_data <- get_sim_data_p10_omit(sample_size=12)
+  omit_fit = lm(sim_omit_data$cb28 ~ sim_omit_data$year)
+  estimates_omit[, iter] = predict(omit_fit)
+  data.frame(estimates_omit)
+}
+
+
+best_annual_concs <-  exp(-4.711 - 0.03354 * years)
+best_annual_means_n_iter <- rep(best_annual_concs, n_iter)
+best_annual_means_matrix <- matrix(best_annual_means_n_iter, nrow=10, ncol=n_iter)
+
+omit_residuals_df <- data.frame(estimates_omit - best_annual_means_matrix)
+
+g = function(x) {
+  mean(x^2)
+}
+
+omit_mse_vector <- apply(omit_residuals_df, 1, g)
+omit_mse_df <- data.frame(omit_mse_vector)
+estimates_omit_mean = apply(estimates_omit, 1, mean)
+omit_bias_sq_vector = (estimates_omit_mean - best_annual_concs)^2
+
+omit_bias_sq_df = data.frame((omit_bias_sq_vector))
+omit_variance_vector = apply(estimates_omit, 1, var)
+omit_variance_df = data.frame(omit_variance_vector)
+omit_mse_bias_sq_var_matrix = matrix(0, nrow = 10, ncol=3)
+omit_mse_bias_sq_var_matrix[,1] <- omit_mse_vector
+omit_mse_bias_sq_var_matrix[,2] <- omit_bias_sq_vector
+omit_mse_bias_sq_var_matrix[,3] <- omit_variance_vector
+omit_mse_bias_sq_var_df <- data.frame(omit_mse_bias_sq_var_matrix)
+colnames(omit_mse_bias_sq_var_df) <- c("mse_omit","bias_omit","variance_omit")
+omit_mse_bias_sq_var_df
+```
+
+### Results
+
+The three graphs A, B, C below show the variation of MSE, squared-bias, and variance respectively, over the simulated 10-year period.  The red line corrresponds to model `omit_fit` (recall: omission of censored observations) and the black line corresponds to `best_fit`.
+
+```{r chunk10e2b, include=FALSE}
+
+best_omit_df <- data.frame(cbind(best_mse_bias_sq_var_df,omit_mse_bias_sq_var_df)) 
+best_omit_tib <- as_tibble(best_omit_df)
+best_omit_tib <- best_omit_tib %>%
+  mutate(year=c(0:9)) %>%
+  mutate(bias_sq_plus_variance_best = bias_best+variance_best) %>%
+  mutate(bias_sq_plus_variance_omit = bias_omit+variance_omit) 
+
+best_omit_tib
+
+best_omit_compare_mse <- ggplot(data = best_omit_tib) +
+  geom_line(mapping = aes(x = year, y = mse_best)) +
+  geom_line(mapping = aes(x = year, y = mse_omit, color="omit"))
+
+best_omit_compare_bias <- ggplot(data = best_omit_tib) +
+  geom_line(mapping = aes(x = year, y = bias_best)) +
+  geom_line(mapping = aes(x = year, y = bias_omit, color="omit"))
+
+best_omit_compare_variance <- ggplot(data = best_omit_tib) +
+  geom_line(mapping = aes(x = year, y = variance_best)) +
+  geom_line(mapping = aes(x = year, y = variance_omit, color="omit"))
+
+
+best_verify_bias_variance_decomp <- ggplot(data = best_omit_tib) +
+  geom_line(mapping = aes(x = year, y = mse_best, color="mse_best")) +
+  geom_line(mapping = aes(x = year, y = bias_sq_plus_variance_best ))
+
+omit_verify_bias_variance_decomp <- ggplot(data = best_omit_tib) +
+  geom_line(mapping = aes(x = year, y = mse_omit, color="mse_omit")) +
+  geom_line(mapping = aes(x = year, y = bias_sq_plus_variance_omit ))
+```
+
+```{r chunk11}
+plot_grid(best_omit_compare_mse, best_omit_compare_bias, best_omit_compare_variance,  labels = "AUTO")
+```
+
+The two graphs A, B below show the variation of MSE (red curve) and squared-bias-plus-variance (black curve) from `best_fit` and `omit_fit` respectively, over the simulated 10-year period.   The famous result "Bias-variance decomposition" states $$ MSE = Bias^2 + Variance$$ so we expect the black and red curves to coincide (be superposed); happily they are :)
+
+```{r chunk12}
+
+plot_grid( best_verify_bias_variance_decomp, omit_verify_bias_variance_decomp, labels = "AUTO")
+
+```
+
+
+
