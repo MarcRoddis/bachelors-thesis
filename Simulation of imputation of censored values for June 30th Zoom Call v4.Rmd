@@ -1,0 +1,466 @@
+---
+title: "Simulation of imputation of censored values for June 30th Zoom Call v4"
+author: "Marc Roddis"
+date: "6/29/2020"
+output: html_document
+---
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+library(gridExtra)
+library(cowplot)
+library("NADA")
+library(truncreg)
+library(truncnorm)
+library(censReg)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+### Finding appropriate simulation parameters from observed data
+
+We created the test dataset `testdata_cen_omit` from the original observed data `pcb.csv` by omitting all missing values of `CB28` and `CB153`, removing all observations except those from herring species, removing all observations prior to 1989, re-indexing 1989 as "year zero", removing all variables except `YEAR`, `CB28` and `CB153`, omitting all censored observations, and replacing concentrations with log-concentrations.
+
+```{r chunk2, include=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+testdata1 <- pcb_tib %>%
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  filter(!is.na(CB28)) %>%
+  filter(!is.na(CB153)) %>%
+  filter(SPECIES == "Herring") %>%
+  filter(YEAR >= 1989) %>%
+  mutate(YEAR = YEAR-1989) %>%
+  select(YEAR, CB28, CB153)
+```
+
+```{r chunk3, include=FALSE}
+geomean <- function(x) round(exp(mean( log(x) ) ),4)
+testdata_cen_omit <- testdata1 %>%
+  filter(CB28>0) %>%
+  filter(CB153>0) %>%
+  group_by(YEAR) %>%
+  summarise_at(vars(CB28,CB153), geomean  ) %>%
+  ungroup()
+testdata_cen_omit_logconc <- testdata_cen_omit %>%
+  mutate(CB28 = log(CB28)) %>%
+  mutate(CB153 = log(CB153))
+```
+
+Fitting linear models to the test data gave the following fixed parameters: $$CB28 = -4.54 - 0.046*YEAR$$ $$CB153 = -1.85 - 0.039*YEAR$$ $$CB28 = -3.12 + 0.86*CB153$$ $$sd(CB28)=0.46$$ $$sd(CB153)=0.46$$
+
+
+```{r chunk4}
+# attach(testdata_cen_omit_logconc) # assume logconcs have normal distribution
+# summary(lm(CB28~YEAR)) # -4.54 - 0.046*YEAR
+# summary(lm(CB153~YEAR)) # -1.85 - 0.039*YEAR
+# summary(lm(CB28~CB153)) # -3.12 + 0.86*CB153
+# summary(lm(CB28~CB153+YEAR)) #  -3.60 + 0.51*CB153 - 0.026*YEAR
+# sd(CB28) # 0.46
+# sd(CB153) # 0.46
+# quant_test <- quantile(testdata_cen_omit_logconc$CB28, probs=0.1, names=FALSE ) # (-5.76, -5.32, -5.22, -4.79)
+# quant_test
+```
+
+#### Simulation and model fitting assuming no censored values
+
+These fixed parameters were used to generate the dataset `data_geomean2` as follows:
+
+12 values for the log-concentration of CB153 per year, for ten years, were generated and denoted as `cb153sim`.
+
+From every such CB153 value, the corresponding value for CB28 was generated.
+
+Annual geometric means for CB28 and CB153 concentrations were generated. 
+
+
+We will first fit a linear model to `data_geomean2`, assuming no censored values; this model `best_fit` is the gold standard against which will will later evaluate our three methods for dealing with censored values: omission, substitution, imputation from cenreg().  We will also test each method at various LOQ values:  For each method, at each LOQ value, we will fit the corresponding linear model and compute the mse, squared-bias, and variance, for each year separately.   We will then use these results to evaluate these three methods.
+
+The code chunk below generates `data_geomean2` for 200 iterations, fits a linear model `best_fit` at each iteration, and computes the corresponding mse, squared-bias and variance.
+
+```{r chunk5, include=FALSE}
+cprop <- 0.5 # censoring proportion
+n_iter <- 400
+set.seed(1)
+years <- c(0:9)
+geomean_prelogged <- function(x) exp(mean(x, na.rm = TRUE))
+
+get_sim_data_best = function(sample_size=12) { 
+  noise153 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  noise28 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  year = rep(years, sample_size)
+  cb153 = -1.85 - 0.039 * year + noise153
+  cb28 = -3.12 + 0.86*cb153 + noise28
+  df = data.frame(year,cb28,cb153)
+  data_tib2 = as_tibble(df)
+  data_geomean2 <- data_tib2 %>%
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+    ungroup()
+  data_geomean2
+}
+
+estimates_best <- matrix(0, nrow = 10, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+  sim_data_best <- get_sim_data_best(sample_size=24)
+  best_fit = lm(sim_data_best$cb28 ~ sim_data_best$year)
+  estimates_best[, iter] = predict(best_fit)
+  data.frame(estimates_best)
+}
+
+best_annual_concs <-  exp(-4.711 - 0.03354 * years)
+best_annual_means_n_iter <- rep(best_annual_concs, n_iter)
+best_annual_means_matrix <- matrix(best_annual_means_n_iter, nrow=10, ncol=n_iter)
+best_residuals_df <- data.frame(estimates_best - best_annual_means_matrix)
+
+g = function(x) {
+  mean(x^2)
+}
+
+best_mse_vector <- apply(best_residuals_df, 1, g)
+best_mse_df <- data.frame(best_mse_vector)
+estimates_best_mean = apply(estimates_best, 1, mean)
+best_bias_sq_vector = (estimates_best_mean - best_annual_concs)^2
+best_bias_sq_df = data.frame((best_bias_sq_vector))
+best_variance_vector = apply(estimates_best, 1, var)
+best_variance_df = data.frame(best_variance_vector)
+best_mse_bias_sq_var_matrix = matrix(0, nrow = 10, ncol=3)
+best_mse_bias_sq_var_matrix[,1] <- best_mse_vector
+best_mse_bias_sq_var_matrix[,2] <- best_bias_sq_vector
+best_mse_bias_sq_var_matrix[,3] <- best_variance_vector
+best_mse_bias_sq_var_df <- data.frame(best_mse_bias_sq_var_matrix)
+colnames(best_mse_bias_sq_var_df) <- c("mse_best","bias_best","variance_best")
+best_mse_bias_sq_var_df
+
+```
+
+#### Simulation and model fitting after omitting censored values
+
+We now generate the dataset `data_omit_geomean` from the fixed parameters as follows:
+
+12 values for the log-concentration of CB153 per year, for ten years, were generated and denoted as `cb153sim`.
+
+From every such CB153 value, the corresponding value for CB28 was generated.
+
+`median(cb28)` was used as the level of quantification `LOQ_p50`.
+
+Observations with CB28 < LOQ_p50 were removed from the dataset.
+
+Annual geometric means for CB28 and CB153 concentrations were generated. 
+
+The code chunk below generates `data_omit_geomean` for 1000 iterations, fits a linear model `omit_fit` at each iteration, and computes the corresponding mse, squared-bias and variance.
+
+```{r chunk6, include=FALSE}
+
+get_sim_data = function(sample_size=24) { 
+  noise153 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  noise28 = rnorm(n = sample_size*10, mean = 0, sd = 0.5) # sd is from obs data
+  year = rep(years, sample_size)
+  cb153 = -1.85 -0.099 * year + noise153 #beta_obs = -0.039
+  # changing beta_obs value, throws an error 
+  cb28 = -3.12 + 0.86*cb153 + noise28
+  data.frame(year,cb28,cb153)
+}
+
+estimates_omit <- matrix(0, nrow = 10, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+  sim_omit_data <- get_sim_data(sample_size=24)
+  data_omit_tib <- as_tibble(sim_omit_data)
+  data_omit_geomean <- data_omit_tib %>%
+    filter(cb28 >= quantile(cb28,probs = 0.5, names=FALSE) ) %>%
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+    ungroup()
+  omit_fit = lm(data_omit_geomean$cb28 ~ data_omit_geomean$year)
+  estimates_omit[, iter] = predict(omit_fit)
+  data.frame(estimates_omit)
+}
+
+
+best_annual_concs <-  exp(-4.711 - 0.03354 * years)
+best_annual_means_n_iter <- rep(best_annual_concs, n_iter)
+best_annual_means_matrix <- matrix(best_annual_means_n_iter, nrow=10, ncol=n_iter)
+
+omit_residuals_df <- data.frame(estimates_omit - best_annual_means_matrix)
+
+g = function(x) {
+  mean(x^2)
+}
+
+omit_mse_vector <- apply(omit_residuals_df, 1, g)
+omit_mse_df <- data.frame(omit_mse_vector)
+estimates_omit_mean = apply(estimates_omit, 1, mean)
+omit_bias_sq_vector = (estimates_omit_mean - best_annual_concs)^2
+
+omit_bias_sq_df = data.frame((omit_bias_sq_vector))
+omit_variance_vector = apply(estimates_omit, 1, var)
+omit_variance_df = data.frame(omit_variance_vector)
+omit_mse_bias_sq_var_matrix = matrix(0, nrow = 10, ncol=3)
+omit_mse_bias_sq_var_matrix[,1] <- omit_mse_vector
+omit_mse_bias_sq_var_matrix[,2] <- omit_bias_sq_vector
+omit_mse_bias_sq_var_matrix[,3] <- omit_variance_vector
+omit_mse_bias_sq_var_df <- data.frame(omit_mse_bias_sq_var_matrix)
+colnames(omit_mse_bias_sq_var_df) <- c("mse_omit","bias_omit","variance_omit")
+omit_mse_bias_sq_var_df
+```
+
+```{r chunk6b, include=FALSE}
+estimates_subst <- matrix(0, nrow = 10, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+  sim_subst_data <- get_sim_data(sample_size=24)
+  data_subst_tib <- as_tibble(sim_subst_data)
+  data_subst_geomean <- data_subst_tib %>%
+    mutate(cb28 = ifelse(cb28<quantile(cb28,probs = cprop, names=FALSE), quantile(cb28,probs = cprop, names=FALSE) - log(sqrt(2) ), cb28)) %>%
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+    ungroup()
+  subst_fit = lm(data_subst_geomean$cb28 ~ data_subst_geomean$year)
+  estimates_subst[, iter] = predict(subst_fit)
+  data.frame(estimates_subst)
+}
+
+subst_residuals_df <- data.frame(estimates_subst - best_annual_means_matrix)
+
+subst_mse_vector <- apply(subst_residuals_df, 1, g)
+subst_mse_df <- data.frame(subst_mse_vector)
+estimates_subst_mean = apply(estimates_subst, 1, mean)
+subst_bias_sq_vector = (estimates_subst_mean - best_annual_concs)^2
+
+subst_bias_sq_df = data.frame((subst_bias_sq_vector))
+subst_variance_vector = apply(estimates_subst, 1, var)
+subst_variance_df = data.frame(subst_variance_vector)
+subst_mse_bias_sq_var_matrix = matrix(0, nrow = 10, ncol=3)
+subst_mse_bias_sq_var_matrix[,1] <- subst_mse_vector
+subst_mse_bias_sq_var_matrix[,2] <- subst_bias_sq_vector
+subst_mse_bias_sq_var_matrix[,3] <- subst_variance_vector
+subst_mse_bias_sq_var_df <- data.frame(subst_mse_bias_sq_var_matrix)
+colnames(subst_mse_bias_sq_var_df) <- c("mse_subst","bias_subst","variance_subst")
+subst_mse_bias_sq_var_df
+```
+
+```{r chunk6c7, include=FALSE}
+
+estimates_cenreg <- matrix(0, nrow = 10, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+  dat <- get_sim_data(sample_size=24)
+  dat_tib = as_tibble(dat)
+  cb28_median <- median(dat_tib$cb28)
+  data_indic <- dat_tib %>%     # Martin's suggestion (must censor values)
+    mutate(cb28 = pmax(cb28, cb28_median )) %>%
+    mutate(ci28 = cb28 < cb28_median ) 
+  data_indic_df <- data.frame(data_indic)
+  
+  
+  cenreg_fit = cenreg(Cen(data_indic_df$cb28, data_indic_df$ci28) ~ data_indic_df$cb153, dist="gaussian")
+  cenreg_alpha <- coef(cenreg_fit)[1]
+  cenreg_beta <- coef(cenreg_fit)[2]
+  cenreg_residual <- residuals(cenreg_fit)
+  
+#   dat_truncreg <- dat_tib %>% #this does not work
+#     mutate(cb28 = pmax(cb28, median(cb28) )) 
+#   tp <- -2.5
+#   truncreg_fit1 <- truncreg(dat_tib$cb28~dat_tib$cb153, dat_tib,
+# point = tp, direction = "left",
+# model = TRUE, y = FALSE, x = FALSE, scaled = FALSE)
+  
+  cenreg_imputed <- dat %>%
+    mutate(cb28 = ifelse(cb28< cb28_median, min(cb28_median,cenreg_alpha + cenreg_beta * cb153), cb28)) %>%
+    # mutate(cb28 = ifelse(cb28<cb28_median, etruncnorm(a=cb28_median, b=Inf, mean=cenreg_alpha + cenreg_beta * cb153, sd=cenreg_residual) , cb28) ) %>% 
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+    ungroup()
+  
+  cenreg_fit_lm = lm(cenreg_imputed$cb28 ~ cenreg_imputed$year)
+  
+  estimates_cenreg[, iter] = predict(cenreg_fit_lm)
+  data.frame(estimates_cenreg)
+}
+
+cenreg_residuals_df <- data.frame(estimates_cenreg - best_annual_means_matrix)
+
+cenreg_mse_vector <- apply(cenreg_residuals_df, 1, g)
+cenreg_mse_df <- data.frame(cenreg_mse_vector)
+estimates_cenreg_mean = apply(estimates_cenreg, 1, mean)
+cenreg_bias_sq_vector = (estimates_cenreg_mean - best_annual_concs)^2
+
+cenreg_bias_sq_df = data.frame((cenreg_bias_sq_vector))
+cenreg_variance_vector = apply(estimates_cenreg, 1, var)
+cenreg_variance_df = data.frame(cenreg_variance_vector)
+cenreg_mse_bias_sq_var_matrix = matrix(0, nrow = 10, ncol=3)
+cenreg_mse_bias_sq_var_matrix[,1] <- cenreg_mse_vector
+cenreg_mse_bias_sq_var_matrix[,2] <- cenreg_bias_sq_vector
+cenreg_mse_bias_sq_var_matrix[,3] <- cenreg_variance_vector
+cenreg_mse_bias_sq_var_df <- data.frame(cenreg_mse_bias_sq_var_matrix)
+colnames(cenreg_mse_bias_sq_var_df) <- c("mse_cenreg","bias_cenreg","variance_cenreg")
+
+```
+
+```{r chunk6c7a}
+
+estimates_censReg <- matrix(0, nrow = 10, ncol = n_iter)
+# censReg( formula, left = 0, right = Inf, data = sys.frame( sys.parent()),
+# start = NULL, nGHQ = 8, logLikOnly = FALSE, ... )
+
+for (iter in 1:n_iter) {
+  dat <- get_sim_data(sample_size=24)
+  dat_tib = as_tibble(dat)
+  cb28_median <- median(dat$cb28)
+  data_cenS <- dat_tib %>%     
+    mutate(cb28 = pmax(cb28, cb28_median ) ) 
+# cR_left <- cb28_median  
+  censReg_fit1 <- censReg( data_cenS$cb28~data_cenS$cb153 + data_cenS$year, left = cb28_median)
+# summary(censReg_fit1)
+  censReg_alpha <- coef(censReg_fit1)[1]
+  censReg_beta_153 <- coef(censReg_fit1)[2]
+  censReg_beta_year <- coef(censReg_fit1)[3]
+  censReg_logSigma <- coef(censReg_fit1)[3]
+
+# lm_fail1 <- lm(data_cenS$cb28~data_cenS$cb153)
+# summary(lm_fail1)
+  
+  censReg_imputed <- dat_tib %>%
+    # mutate(cb28 = ifelse(cb28 < cb28_median, min(cb28_median, censReg_alpha + censReg_beta * cb153), cb28)) %>%
+    mutate(cb28 = ifelse(cb28<cb28_median, etruncnorm(a=cb28_median, b=Inf, mean=censReg_alpha + censReg_beta_153 * cb153 + censReg_beta_year * year, sd=censReg_logSigma) , cb28) ) %>%  
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+    ungroup()
+  
+  censReg_fit_lm = lm(censReg_imputed$cb28 ~ censReg_imputed$year)
+  
+  estimates_censReg[, iter] = predict(censReg_fit_lm)
+  data.frame(estimates_censReg)
+}
+
+censReg_residuals_df <- data.frame(estimates_censReg - best_annual_means_matrix)
+
+censReg_mse_vector <- apply(censReg_residuals_df, 1, g)
+censReg_mse_df <- data.frame(censReg_mse_vector)
+estimates_censReg_mean = apply(estimates_censReg, 1, mean)
+censReg_bias_sq_vector = (estimates_censReg_mean - best_annual_concs)^2
+
+censReg_bias_sq_df = data.frame((censReg_bias_sq_vector))
+censReg_variance_vector = apply(estimates_censReg, 1, var)
+censReg_variance_df = data.frame(censReg_variance_vector)
+censReg_mse_bias_sq_var_matrix = matrix(0, nrow = 10, ncol=3)
+censReg_mse_bias_sq_var_matrix[,1] <- censReg_mse_vector
+censReg_mse_bias_sq_var_matrix[,2] <- censReg_bias_sq_vector
+censReg_mse_bias_sq_var_matrix[,3] <- censReg_variance_vector
+censReg_mse_bias_sq_var_df <- data.frame(censReg_mse_bias_sq_var_matrix)
+colnames(censReg_mse_bias_sq_var_df) <- c("mse_censReg","bias_censReg","variance_censReg")
+
+```
+
+
+
+### Results
+
+The three graphs A, B, C below show the variation of MSE, squared-bias, and variance respectively, over the simulated 10-year period.  The red line corrresponds to model `omit_fit` (recall: omission of censored observations) and the black line corresponds to `best_fit`.
+
+```{r chunk7}
+
+all_results_df <- data.frame(cbind(best_mse_bias_sq_var_df,omit_mse_bias_sq_var_df, subst_mse_bias_sq_var_df, cenreg_mse_bias_sq_var_df, censReg_mse_bias_sq_var_df)) 
+all_results_tib <- as_tibble(all_results_df)
+all_results_tib <- all_results_tib %>%
+  mutate(year=c(0:9)) %>%
+  mutate(bias_sq_plus_variance_best = bias_best+variance_best) %>%
+  mutate(bias_sq_plus_variance_omit = bias_omit+variance_omit) %>%
+  mutate(bias_sq_plus_variance_subst = bias_omit+variance_subst) %>%
+  mutate(bias_sq_plus_variance_cenreg = bias_omit+variance_cenreg) %>% 
+  mutate(bias_sq_plus_variance_censReg = bias_omit+variance_censReg)  
+
+# all_results_tib
+
+plot_all_mse <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y = mse_best, color="best")) +
+  # geom_line(mapping = aes(x = year, y = mse_omit, color="omit")) +
+  geom_line(mapping = aes(x = year, y = mse_subst, color="subst")) +
+  geom_line(mapping = aes(x = year, y = mse_cenreg, color="cenreg")) +
+  geom_line(mapping = aes(x = year, y = mse_censReg, color="censReg"))
+
+
+plot_all_bias <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y = bias_best, color="best")) +
+  # geom_line(mapping = aes(x = year, y = bias_omit, color="omit")) +
+  geom_line(mapping = aes(x = year, y = bias_subst, color="subst")) +
+  geom_line(mapping = aes(x = year, y = bias_cenreg, color="cenreg")) +
+  geom_line(mapping = aes(x = year, y = bias_censReg, color="censReg"))
+
+
+# bias_omit is so high that it is omitted from the following plot
+plot_best_subst_cenreg_bias <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y = bias_best, color="best")) +
+  geom_line(mapping = aes(x = year, y = bias_subst, color="subst")) +
+  geom_line(mapping = aes(x = year, y = bias_cenreg, color="cenreg")) +
+  geom_line(mapping = aes(x = year, y = bias_censReg, color="censReg"))
+
+
+plot_all_variance <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y = variance_best, color="best")) +
+  # geom_line(mapping = aes(x = year, y = variance_omit, color="omit")) +
+  geom_line(mapping = aes(x=year, y=variance_subst, color="subst")) +
+  geom_line(mapping = aes(x=year, y=variance_cenreg, color="cenreg")) +
+  geom_line(mapping = aes(x=year, y=variance_censReg, color="censReg"))
+
+
+# best_verify_bias_variance_decomp <- ggplot(data = all_results_tib) +
+#   geom_line(mapping = aes(x = year, y = mse_best, color="mse_best")) +
+#   geom_line(mapping = aes(x = year, y = bias_sq_plus_variance_best ))
+# 
+# omit_verify_bias_variance_decomp <- ggplot(data = all_results_tib) +
+#   geom_line(mapping = aes(x = year, y = mse_omit, color="mse_omit")) +
+#   geom_line(mapping = aes(x = year, y = bias_sq_plus_variance_omit ))
+```
+
+```{r chunk8}
+# quantile(dat$cb28,probs = cprop, names = FALSE)
+# cenreg_alpha
+# cenreg_beta
+# data_indic
+# data_subst_geomean2 <- data_subst_tib %>%
+#   mutate(cb28 = ifelse(cb28<quantile(cb28,probs = cprop, names=FALSE), quantile(cb28,probs = cprop, names=FALSE) - log(sqrt(2) ), cb28)) %>%
+#   group_by(year) %>%
+#   summarise_at(vars(cb28, cb153), geomean_prelogged  ) %>%
+#   ungroup()
+# 
+# data_indic2 <- dat_tib %>%     # Martin's suggestion (must censor values)
+#     mutate(cb28 = pmax(cb28, quantile(cb28,probs = cprop, names=FALSE) )) %>%
+#     mutate(ci28 = cb28 < quantile(cb28,probs = cprop, names=FALSE) )
+# data_subst_geomean2$cb28
+# mean(data_subst_tib$cb28)
+# sum(data_indic2$ci28)
+# plot_grid(plot_all_mse, plot_all_bias, plot_best_subst_cenreg_bias, plot_all_variance, labels = "AUTO")
+plot_all_mse
+plot_all_bias
+plot_best_subst_cenreg_bias
+plot_all_variance
+coef(censReg_fit1)
+```
+
+The two graphs A, B below show the variation of MSE (red curve) and squared-bias-plus-variance (black curve) from `best_fit` and `omit_fit` respectively, over the simulated 10-year period.   The famous result "Bias-variance decomposition" states $$ MSE = Bias^2 + Variance$$ so we expect the black and red curves to coincide (be superposed); happily they are :)
+
+```{r chunk9}
+
+# plot_grid( best_verify_bias_variance_decomp, omit_verify_bias_variance_decomp, labels = "AUTO")
+
+```
+
+###  Summary and ideas
+
+Cenreg worked best without etruncnorm whereas censReg worked best with it.
+
+Sqrt(2) seems to be the best denominator.  I could also try other numbers denominators and compare.
+
+Could try cenreg and censReg with or without `year`.
+
+Could find mse, squared-bias and variance with respect to estimation of beta.
+
+Could try Nada > ros (regression on order statistics); ref `Tekindal2017_EvaluatingLeft-CensoredDataBySimulationStudy.pdf`.
+
+Could try different values of beta.  Different quantiles for LOD.
+
