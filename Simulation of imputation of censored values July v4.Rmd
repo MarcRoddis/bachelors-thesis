@@ -1,0 +1,944 @@
+---
+title: "Simulation of imputation of censored values July v4"
+author: "Marc Roddis"
+date: "6/29/2020"
+output: html_document
+---
+
+```{r chunk1, include=FALSE}
+library(RCurl)
+library(tidyverse)
+library(styler)
+library(gridExtra)
+library(cowplot)
+library("NADA")
+library(truncreg)
+library(truncnorm)
+library(censReg)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+### Finding appropriate simulation parameters from observed data
+
+We created the test dataset `testdata_cen_omit` from the original observed data `pcb.csv` by omitting all missing values of `CB28` and `CB153`, removing all observations except those from herring species, removing all observations prior to 1989, re-indexing 1989 as "year zero", removing all variables except `YEAR`, `CB28` and `CB153`, omitting all censored observations, and replacing concentrations with log-concentrations.
+
+```{r chunk2, eval=FALSE}
+pcb_df <- read_csv("pcb.csv")
+pcb_tib <- as_tibble(pcb_df)
+testdata1 <- pcb_tib %>%
+  mutate(CB28 = ifelse(CB28< -8, NA, CB28) ) %>%
+  mutate(CB153 = ifelse(CB153< -8, NA, CB153) ) %>%
+  mutate(CB28 = ifelse(CB28> -0.0001 & CB28< 0.0001, NA, CB28) ) %>%
+  filter(!is.na(CB28)) %>%
+  filter(!is.na(CB153)) %>%
+  filter(SPECIES == "Herring") %>%
+  filter(YEAR >= 2003) %>%
+  mutate(YEAR = YEAR-2003) %>%
+  select(YEAR, CB28, CB153)
+# sum(testdata1$CB28>0) / length(testdata1$CB28) # 0.34
+# i.e. 34% of observations are cb28 censored in real data
+```
+
+```{r chunk3, eval=FALSE}
+# geomean <- function(x) round(exp(mean( log(x) ) ),4)
+testdata_cen_omit <- testdata1 %>%
+  mutate(CB28 = log( abs( CB28))) %>%
+  mutate(CB153 = log( abs( CB153))) %>%
+  group_by(YEAR) %>%
+  summarise_at(vars(CB28,CB153), mean  ) %>%
+  ungroup()
+# testdata_cen_omit_logconc <- testdata_cen_omit %>%
+#   mutate(CB28 = log(CB28)) %>%
+#   mutate(CB153 = log(CB153))
+```
+
+Fitting linear models to the test data gave the following fixed parameters:  $$CB153 = -2.91 - 0.02*YEAR$$ $$CB28 = -3.18 + 0.79*CB153$$ $$sd(CB28)=sd(CB153)=0.1$$ 
+
+
+```{r chunk4, eval=FALSE}
+attach(testdata_cen_omit) # assume logconcs have normal distribution
+summary(lm(CB28~YEAR)) # -5.42 - 0.02*YEAR residualSE=0.10
+summary(lm(CB153~YEAR)) # -2.91 - 0.02*YEAR residualSE=0.09
+summary(lm(CB28~CB153)) # -3.18 + 0.79*CB153 residualSE=0.10
+# summary(lm(CB28~CB153+YEAR)) not planning to use this
+```
+
+We will use parameters values estimated from real data for our first simulation to study the effectiveness of various methods of dealing with censored data.  In subsequent studies, we will investigate how generally applicable these methods are for various other possible choices of parameter values.  We will use logarithmised concentrations for CB28 and CB153 and refer to these as cb28 and cb153 respectively throughout.
+
+100 values for cb153 per year, for 15 years, were generated and denoted as `cb153` from $$CB153 = -2.91 - 0.02*YEAR$$ with added noise (modeled with normal distribution with mean = 0 and sd = 0.1).
+
+From every such CB153 value, the corresponding value for CB28 was generated from $$CB28 = -3.18 + 0.79*CB153$$, again with added noise (modeled with normal distribution with mean = 0 and sd = 0.1).  From these equations, we deduce that `true_beta28year` = 0.79 * -0.02;  we will use this as the "true" value against which we evaluate the estimates for this parameter from applying various methods to censored data. 
+
+From real data for the 15 year period 2003-2017, 34 % of the cb28 values were censored, so we will use the parameter value `cprop=0.34` in this first simulation study.  Values of cb28 below the value below the level of detection (LOD) were then censored.  The LOD was calculated from the cprop*100th percentile of the simulated data at each iteration. 
+
+#### Applying and evaluating censoring methods
+
+The regression coefficient `beta28year` for CB28 ~ YEAR was estimated by generating simulated datasets and applying five different methods to the censored values, and then estimating `beta28year` by fitting a linear model to the resulting datasets from each method.  The methods were:
+
+`omit` means censored values were omitted.
+
+`subst2` means censored values were substituted with $\frac{LOD}{\sqrt(2)}$.
+
+`subst1` means censored values were substituted with $\frac{LOD}{\sqrt(1)}=LOD$. 
+
+`subst4` means censored values were substituted with $\frac{LOD}{\sqrt(4)}=\frac{LOD}{2}$.
+
+`censReg1` means censored values were imputed using the `censReg()` function from the `censReg` package using 1 predictor variables (cb153).   The censreg MLE estimates for `beta28year` and the residual standard errors were then fed as mean and standard deviation respectively into the `etruncnorm()` function from the `truncnorm` package, from which every censored value was subsituted with the corresponding imputed value.    
+
+`censReg2` means censored values were imputed as described for `censReg1`, except that two predictor variables (cb153 and year) were used instead 
+
+`censReg1naive` and `censReg2naive` are the same as `censReg1` and `censReg2` respectively, except that a non-truncated normal distribution was used instead.  This was done to check that we get a more biased estimate because it is possible that the imputed values are above LOD, despite the fact that the censored value are below LOD.
+
+`censReg0impute` estimates `beta28year` directly from the MLE value generated by the `censReg()` function; no imputation is done at all in this method. 
+
+`ros` (regression on order statistics) means that the mean CB28 concentration `mean_ros` was estimated for each year by `ros()` from the NADA package.  This means that this model has lower complexity because no predictor variable is used in the imputation, so it would be expected to have lower variance but higher bias than `censReg1`, which in turn would be lower and higher than `censReg2` respectively.
+
+Each method for acting upon the censored data was then applied, then `beta28year` was estimated for each method.  The MSE, squared-bias and variance for each estimate of `beta28year` was then reported and used to evaluate the censoring methods.
+
+```{r chunk5, include=FALSE}
+# This code block initialises variables
+# and generates the simulated dataset
+
+cprop = 0.34 # censoring proportion from real data
+# cprop is of primary interest to vary in simulations
+
+true_alpha153year <- -2.91 # fixed from real data
+true_beta153year <- -0.02 # -0.02 from real data. 
+# true_beta28year is of secondary interest to vary in simulations
+
+true_alpha28_153 <- -3.18 # fixed from real data
+true_beta28_153 <- 0.79 # fixed from real data
+
+sd153year <- 0.1 # 0.1 from real data.
+sd28_153 <- 0.1 # 0.1 from real data.
+# sd28_153 is of tertiary interest to vary in simulations
+
+n_iter <- 100
+set.seed(1)
+years <- c(0:14) # selected period is 15 years
+n_obs=100 # approx. 100 obs. per year (total: all locations)
+
+get_sim_data = function(sample_size=n_obs) { 
+  noise153 = rnorm(n = sample_size*15, mean = 0, sd = sd153year) 
+  noise28 = rnorm(n = sample_size*15, mean = 0, sd = sd28_153) 
+  year = rep(years, sample_size)
+  cb153 = true_alpha153year + true_beta153year * year + noise153 
+  cb28 = true_alpha28_153 + true_beta28_153*cb153 + noise28
+  data.frame(year,cb28,cb153)
+}
+
+all_sim_data <- list()
+for (iter in 1:n_iter) {
+  all_sim_data[[iter]] <- get_sim_data()
+}
+```
+
+```{r chunk5b1, include=FALSE}
+# This code block fits a lm to the whole dataset
+# and predicts cb28 for every year from this lm
+# n_iter estimates are each stored in a column
+# of estimates_best.
+
+estimates_best <- matrix(0, nrow = 15, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+  data_tib = as_tibble(all_sim_data[[iter]])
+  best_yearly_mean <- data_tib %>%
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), mean  ) %>%
+    ungroup()
+  best_fit = lm(best_yearly_mean$cb28 ~ best_yearly_mean$year)
+  estimates_best[, iter] = predict(best_fit)
+  data.frame(estimates_best)
+}
+
+```
+
+```{r chunk5b2, include=FALSE}
+true_beta28year <- true_beta28_153 * true_beta153year
+
+best_annual_concs <-  true_alpha28_153 + true_beta28_153 * (true_alpha153year + true_beta153year * years)  
+best_annual_means_n_iter <- rep(best_annual_concs, n_iter)
+best_annual_means_matrix <- matrix(best_annual_means_n_iter, nrow=15, ncol=n_iter)
+best_residuals_df <- data.frame(estimates_best - best_annual_means_matrix)
+
+g = function(x) {
+  mean(x^2)
+}
+
+mse_bias_sq_var_matrix = matrix(0, nrow = 15, ncol=3)
+
+get_all_results_by_year = function(estimates_df) {
+  residuals_df = data.frame(estimates_df - best_annual_means_matrix)
+  mse_vector = apply(residuals_df, 1, g)
+  estimates_mean = apply(estimates_df, 1, mean)
+  bias_sq_vector = (estimates_mean - best_annual_concs)^2
+  variance_vector = apply(estimates_df, 1, var)
+  mse_bias_sq_var_matrix[,1] <- mse_vector
+  mse_bias_sq_var_matrix[,2] <- bias_sq_vector
+  mse_bias_sq_var_matrix[,3] <- variance_vector
+  data.frame(mse_bias_sq_var_matrix)
+} 
+
+all_results_beta28year <- matrix(0, nrow = 1, ncol=3)
+
+get_all_results_beta28year = function(estimates_df) {
+  mse_beta_vector = mean( (estimates_df - true_beta28year)^2 )
+  bias_sq_beta_vector = (mean(estimates_df) - true_beta28year)^2
+  variance_beta_vector = var(estimates_df)
+  all_results_beta28year[1] <- mse_beta_vector
+  all_results_beta28year[2] <- bias_sq_beta_vector
+  all_results_beta28year[3] <- variance_beta_vector
+  data.frame(all_results_beta28year)
+} 
+
+```
+
+```{r chunk6, include=FALSE}
+# This code removes censored observations and 
+# fits a lm to the resulting smaller dataset
+# and predicts cb28 for every year from this lm.
+# n_iter estimates are each stored in a column
+# of estimates_omit.
+
+get_beta_estimates_omit = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    omit_yearly_mean <- data_tib %>%
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) %>% #censor the data
+      filter(cb28 > cb28_cprop ) %>% # remove censored data
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    omit_fit = lm(omit_yearly_mean$cb28 ~ omit_yearly_mean$year, na.action = na.omit)
+    
+    estimates_omit_beta[iter] = coef(omit_fit)[2]
+  }
+  return(estimates_omit_beta)
+}
+
+get_yearly_estimates_omit = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    omit_yearly_mean <- data_tib %>%
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) %>% #censor the data
+      filter(cb28 > cb28_cprop ) %>% # remove censored data
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    omit_fit = lm(omit_yearly_mean$cb28 ~ omit_yearly_mean$year, na.action = na.omit)
+    
+    estimates_omit[, iter] = predict(omit_fit)
+    data.frame(estimates_omit)
+  }
+  return(estimates_omit)
+}
+
+
+estimates_omit_beta <- rep(0,n_iter)
+estimates_omit <- matrix(0, nrow = 15, ncol = n_iter)
+estimates_omit_beta <- get_beta_estimates_omit(cprop=0.34, n_iter=100)
+estimates_omit <- get_yearly_estimates_omit(cprop=0.34, n_iter=100)
+
+```
+
+```{r chunk6b1, include=FALSE}
+# subst2 means subst. with LOD/sqrt(2)
+# subst1 means subst. with LOD/sqrt(1) = LOD
+# subst4 means subst. with LOD/sqrt(4)
+
+get_beta_estimates_subst2 = function(cprop, n_iter) {
+
+  # estimates_subst2_beta <- rep(0, n_iter)
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)
+    subst2_yearly_mean <- data_tib %>%
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) %>% # censor the data
+      mutate(cb28 = ifelse(cb28 == cb28_cprop, cb28_cprop - log(sqrt(2) ), cb28)) %>% # substitute censored data with LOD/sqrt(2)
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    subst2_fit = lm(subst2_yearly_mean$cb28 ~ subst2_yearly_mean$year)
+  
+    estimates_subst2_beta[iter] = coef(subst2_fit)[2]
+    
+  }
+  return(estimates_subst2_beta)
+}
+
+get_yearly_estimates_subst2 = function(cprop, n_iter) {
+
+  # estimates_subst2 <- matrix(0, nrow = 15, ncol = n_iter)
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)
+    subst2_yearly_mean <- data_tib %>%
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) %>% # censor the data
+      mutate(cb28 = ifelse(cb28 == cb28_cprop, cb28_cprop - log(sqrt(2) ), cb28)) %>% # substitute censored data with LOD/sqrt(2)
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    subst2_fit = lm(subst2_yearly_mean$cb28 ~ subst2_yearly_mean$year)
+  
+    estimates_subst2[, iter] = predict(subst2_fit)
+    data.frame(estimates_subst2)
+  }
+  return(estimates_subst2)
+}
+
+estimates_subst2_beta <- rep(0, n_iter)
+estimates_subst2 <- matrix(0, nrow = 15, ncol = n_iter)
+
+estimates_subst2_beta <- get_beta_estimates_subst2(cprop=0.34, n_iter=100)
+estimates_subst2 <- get_yearly_estimates_subst2(cprop=0.34, n_iter=100)
+
+```
+
+```{r chunk6b2, include=FALSE}
+
+get_beta_estimates_subst1 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)
+    subst1_yearly_mean <- data_tib %>%
+      mutate(cb28 = ifelse(cb28 < cb28_cprop, cb28_cprop, cb28)) %>%
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    subst1_fit = lm(subst1_yearly_mean$cb28 ~ subst1_yearly_mean$year)
+  
+  estimates_subst1_beta[iter] = coef(subst1_fit)[2]
+  }
+  return(estimates_subst1_beta)
+}
+
+get_yearly_estimates_subst1 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)
+    subst1_yearly_mean <- data_tib %>%
+      mutate(cb28 = ifelse(cb28 < cb28_cprop, cb28_cprop, cb28)) %>%
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    subst1_fit = lm(subst1_yearly_mean$cb28 ~ subst1_yearly_mean$year)
+  
+  estimates_subst1[, iter] = predict(subst1_fit)
+  data.frame(estimates_subst1)
+  }
+  return(estimates_subst1)
+}  
+
+estimates_subst1_beta <- rep(0, n_iter)
+estimates_subst1 <- matrix(0, nrow = 15, ncol = n_iter)
+estimates_subst1_beta <- get_beta_estimates_subst1(cprop=0.34, n_iter=100)
+estimates_subst1 <- get_yearly_estimates_subst1(cprop=0.34, n_iter=100)
+```
+
+```{r chunk6b4, include=FALSE}
+# subst4 means subst. with LOD/2
+get_beta_estimates_subst4 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)
+    subst4_yearly_mean <- data_tib %>%
+      mutate(cb28 = ifelse(cb28 < cb28_cprop, cb28_cprop - log(sqrt(4)), cb28)) %>%
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    subst4_fit = lm(subst4_yearly_mean$cb28 ~ subst4_yearly_mean$year)
+  
+    estimates_subst4_beta[iter] = coef(subst4_fit)[2]
+  }
+  return(estimates_subst4_beta)
+}
+
+get_yearly_estimates_subst4 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)
+    subst4_yearly_mean <- data_tib %>%
+      mutate(cb28 = ifelse(cb28 < cb28_cprop, cb28_cprop - log(sqrt(4)), cb28)) %>%
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+    subst4_fit = lm(subst4_yearly_mean$cb28 ~ subst4_yearly_mean$year)
+  
+    estimates_subst4[, iter] = predict(subst4_fit)
+    data.frame(estimates_subst4)
+  }
+  return(estimates_subst4)
+}  
+estimates_subst4_beta <- rep(0, n_iter)
+estimates_subst4 <- matrix(0, nrow = 15, ncol = n_iter)
+estimates_subst4_beta <- get_beta_estimates_subst4(cprop=0.34, n_iter=100)
+estimates_subst4 <- get_yearly_estimates_subst4(cprop=0.34, n_iter=100)
+```
+
+```{r chunk6b5, eval=FALSE}
+# subst0 means subst. with 0
+estimates_subst0_beta <- rep(0, n_iter)
+
+estimates_subst0 <- matrix(0, nrow = 15, ncol = n_iter)
+
+for (iter in 1:n_iter) {
+  data_tib = as_tibble(all_sim_data[[iter]])
+  cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)
+  subst0_yearly_mean <- data_tib %>%
+    mutate(cb28 = ifelse(cb28 < cb28_cprop, 0, cb28)) %>%
+    group_by(year) %>%
+    summarise_at(vars(cb28, cb153), mean  ) %>%
+    ungroup()
+  subst0_fit = lm(subst0_yearly_mean$cb28 ~ subst0_yearly_mean$year)
+  
+  estimates_subst0_beta[iter] = coef(subst0_fit)[2]
+  estimates_subst0[, iter] = predict(subst0_fit)
+  data.frame(estimates_subst0)
+}
+```
+
+
+
+```{r chunk6c3, include=FALSE}
+
+get_beta_estimates_censReg1 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    data_cens <- data_tib %>%     
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) 
+  
+    censReg1_fit1 <- censReg( data_cens$cb28~data_cens$cb153, left = cb28_cprop)
+    censReg1_alpha <- coef(censReg1_fit1, logSigma =FALSE)[1]
+    censReg1_beta_153 <- coef(censReg1_fit1, logSigma =FALSE)[2]
+    censReg1_logSigma <- coef(censReg1_fit1, logSigma =FALSE)[3]
+
+    censReg1_yearly_mean <- data_cens %>%
+      mutate(cb28 = ifelse(cb28 == cb28_cprop, etruncnorm(a=-Inf, b=cb28_cprop, mean=censReg1_alpha + censReg1_beta_153 * cb153, sd=censReg1_logSigma) , cb28) ) %>%  
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+  
+    censReg1_fit_lm = lm(censReg1_yearly_mean$cb28 ~ censReg1_yearly_mean$year)
+
+    estimates_censReg1_beta[iter] = coef(censReg1_fit_lm)[2]
+  }
+  return(estimates_censReg1_beta)
+}
+
+get_yearly_estimates_censReg1 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    data_cens <- data_tib %>%     
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) 
+  
+    censReg1_fit1 <- censReg( data_cens$cb28~data_cens$cb153, left = cb28_cprop)
+    censReg1_alpha <- coef(censReg1_fit1, logSigma =FALSE)[1]
+    censReg1_beta_153 <- coef(censReg1_fit1, logSigma =FALSE)[2]
+    censReg1_logSigma <- coef(censReg1_fit1, logSigma =FALSE)[3]
+
+    censReg1_yearly_mean <- data_cens %>%
+      mutate(cb28 = ifelse(cb28 == cb28_cprop, etruncnorm(a=-Inf, b=cb28_cprop, mean=censReg1_alpha + censReg1_beta_153 * cb153, sd=censReg1_logSigma) , cb28) ) %>%  
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+  
+    censReg1_fit_lm = lm(censReg1_yearly_mean$cb28 ~ censReg1_yearly_mean$year)
+
+    estimates_censReg1[, iter] = predict(censReg1_fit_lm)
+    data.frame(estimates_censReg1)
+  }
+  return(estimates_censReg1)
+}
+
+get_beta_estimates_censReg1naive = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    data_cens <- data_tib %>%     
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) 
+  
+    censReg1_fit1 <- censReg( data_cens$cb28~data_cens$cb153, left = cb28_cprop)
+    censReg1_alpha <- coef(censReg1_fit1, logSigma =FALSE)[1]
+    censReg1_beta_153 <- coef(censReg1_fit1, logSigma =FALSE)[2]
+    censReg1_logSigma <- coef(censReg1_fit1, logSigma =FALSE)[3]
+
+    censReg1naive_yearly_mean <- data_cens %>%
+      mutate(cb28 = ifelse(cb28 == cb28_cprop, censReg1_alpha + censReg1_beta_153 * cb153, cb28) ) %>%  
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+  
+    censReg1naive_fit_lm = lm(censReg1naive_yearly_mean$cb28 ~ censReg1naive_yearly_mean$year)
+  
+    estimates_censReg1naive_beta[iter] = coef(censReg1naive_fit_lm)[2]
+  }
+  return(estimates_censReg1naive_beta)
+}
+
+
+
+get_beta_estimates_censReg0impute = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    data_cens <- data_tib %>%     
+      mutate(cb28 = pmax(cb28, cb28_cprop ) ) 
+  
+# censReg0impute just estimates beta28year directly 
+  # from censReg without first imputing (via cb153).
+  censReg0impute_fit <- censReg( data_cens$cb28 ~ data_cens$year, left = cb28_cprop) 
+  
+  estimates_censReg0impute_beta[iter] <- coef(censReg0impute_fit)[2]
+  }
+  return(estimates_censReg0impute_beta)
+}
+
+estimates_censReg1 <- matrix(0, nrow = 15, ncol = n_iter)
+estimates_censReg1_beta <- rep(0, n_iter)
+estimates_censReg1naive_beta <- rep(0, n_iter)
+estimates_censReg0impute_beta <- rep(0, n_iter)
+
+estimates_censReg1 <- get_yearly_estimates_censReg1(cprop, n_iter)
+estimates_censReg1_beta <- get_beta_estimates_censReg1(cprop, n_iter)
+estimates_censReg1naive_beta <- get_beta_estimates_censReg1naive(cprop, n_iter)
+estimates_censReg0impute_beta <- get_beta_estimates_censReg0impute(cprop, n_iter)
+```
+  
+```{r chunk6c2, include=FALSE}
+# censReg2 has 2 predictor variables (cb153, year) 
+# whereas censReg1 has 1 (cb153).
+# naive means using non-truncated normal dist.
+
+get_beta_estimates_censReg2 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    data_cens <- data_tib %>%     
+      mutate(cb28 = pmax(cb28, cb28_cprop ) )
+  
+    censReg2_fit1 <- censReg( data_cens$cb28~data_cens$cb153 + data_cens$year, left = cb28_cprop)
+    censReg2_alpha <- coef(censReg2_fit1)[1]
+    censReg2_beta_153 <- coef(censReg2_fit1)[2]
+    censReg2_beta_year <- coef(censReg2_fit1)[3]
+    censReg2_logSigma <- coef(censReg2_fit1, logSigma =FALSE)[4]
+
+    censReg2_yearly_mean <- data_cens %>%
+      mutate(cb28 = ifelse(cb28 == cb28_cprop, etruncnorm(a=-Inf, b=cb28_cprop, mean=censReg2_alpha + censReg2_beta_153 * cb153 + censReg2_beta_year * year, sd=censReg2_logSigma) , cb28) ) %>%  
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+  
+    censReg2_fit_lm = lm(censReg2_yearly_mean$cb28 ~ censReg2_yearly_mean$year)
+    estimates_censReg2_beta[iter] = coef(censReg2_fit_lm)[2]
+  }
+  return(estimates_censReg2_beta)
+}
+  
+get_yearly_estimates_censReg2 = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28,probs = cprop, names=FALSE)  
+    data_cens <- data_tib %>%     
+      mutate(cb28 = pmax(cb28, cb28_cprop ) )
+  
+    censReg2_fit1 <- censReg( data_cens$cb28~data_cens$cb153 + data_cens$year, left = cb28_cprop)
+    censReg2_alpha <- coef(censReg2_fit1)[1]
+    censReg2_beta_153 <- coef(censReg2_fit1)[2]
+    censReg2_beta_year <- coef(censReg2_fit1)[3]
+    censReg2_logSigma <- coef(censReg2_fit1, logSigma =FALSE)[4]
+
+    censReg2_yearly_mean <- data_cens %>%
+      mutate(cb28 = ifelse(cb28 == cb28_cprop, etruncnorm(a=-Inf, b=cb28_cprop, mean=censReg2_alpha + censReg2_beta_153 * cb153 + censReg2_beta_year * year, sd=censReg2_logSigma) , cb28) ) %>%  
+      group_by(year) %>%
+      summarise_at(vars(cb28, cb153), mean  ) %>%
+      ungroup()
+  
+    censReg2_fit_lm = lm(censReg2_yearly_mean$cb28 ~ censReg2_yearly_mean$year)
+  
+    estimates_censReg2[, iter] = predict(censReg2_fit_lm)
+    data.frame(estimates_censReg2)
+  }
+  return(estimates_censReg2)
+}
+
+estimates_censReg2 <- matrix(0, nrow = 15, ncol = n_iter)
+estimates_censReg2_beta <- rep(0, n_iter)
+estimates_censReg2 <- get_yearly_estimates_censReg2(cprop, n_iter)
+estimates_censReg2_beta <- get_beta_estimates_censReg2(cprop, n_iter)
+
+```
+
+
+```{r chunk7a, include=FALSE}
+
+get_beta_estimates_ros = function(cprop, n_iter) {
+
+  for (iter in 1:n_iter) {
+    data_tib = as_tibble(all_sim_data[[iter]])
+    cb28_cprop <- quantile(data_tib$cb28, probs = cprop, names = FALSE)
+    data_indic <- data_tib %>%     
+      mutate(cb28 = pmax(cb28, cb28_cprop )) %>%
+      mutate(ci28 = cb28 == cb28_cprop ) 
+    data_indic_ros_aug <- data_indic %>%
+      group_by(year) %>%
+      mutate(mean_ros = mean(ros(cb28, ci28, forwardT=NULL, reverseT=NULL) ) ) %>%
+      ungroup()
+    ros_trial_lm <- lm(data_indic_ros_aug$mean_ros ~ data_indic_ros_aug$year) # I also tried using two predictor variables 
+  # here but the resulting increase in bias was larger than the
+  # decrease in variance
+    estimates_ros_beta[iter] <- coef(ros_trial_lm)[2]
+  }
+  return(estimates_ros_beta)
+}
+
+estimates_ros_beta <- rep(0, n_iter)
+estimates_ros_beta <- get_beta_estimates_ros(cprop, n_iter)
+```
+
+```{r chunk7a2, include=FALSE}
+
+all_results_beta_omit <- get_all_results_beta28year(estimates_omit_beta)
+rownames(all_results_beta_omit) <- "omit"
+colnames(all_results_beta_omit) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_subst2 <- get_all_results_beta28year(estimates_subst2_beta)
+rownames(all_results_beta_subst2) <- "subst2"
+colnames(all_results_beta_subst2) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_subst1 <- get_all_results_beta28year(estimates_subst1_beta)
+rownames(all_results_beta_subst1) <- "subst1"
+colnames(all_results_beta_subst1) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_subst4 <- get_all_results_beta28year(estimates_subst4_beta)
+rownames(all_results_beta_subst4) <- "subst4"
+colnames(all_results_beta_subst4) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg1 <- get_all_results_beta28year(estimates_censReg1_beta)
+rownames(all_results_beta_censReg1) <- "censReg1"
+colnames(all_results_beta_censReg1) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg1naive <- get_all_results_beta28year(estimates_censReg1naive_beta)
+rownames(all_results_beta_censReg1naive) <- "censReg1naive"
+colnames(all_results_beta_censReg1naive) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg2 <- get_all_results_beta28year(estimates_censReg2_beta)
+rownames(all_results_beta_censReg2) <- "censReg2"
+colnames(all_results_beta_censReg2) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg0impute <- get_all_results_beta28year(estimates_censReg0impute_beta)
+rownames(all_results_beta_censReg0impute) <- "censReg0impute"
+colnames(all_results_beta_censReg0impute) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_ros <- get_all_results_beta28year(estimates_ros_beta)
+rownames(all_results_beta_ros) <- "ros"
+colnames(all_results_beta_ros) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta <- rbind(all_results_beta_omit, all_results_beta_subst2, all_results_beta_subst1, all_results_beta_subst4, all_results_beta_censReg1, all_results_beta_censReg1naive, all_results_beta_censReg2, all_results_beta_censReg0impute, all_results_beta_ros) 
+# all_results_beta_ros (remove when cprop > 0.3 ?)
+```
+
+### Results
+
+#### Estimation of the regression coefficient `beta28year`
+
+The MSE, squared-bias and variance for the estimation of `beta28year` from each method from our first simulation study are displayed in the table below; note that all values shown in the table are 100000 times bigger than the actual values (to make them easier to read and compare).
+
+We see that `censReg1`, `censReg2` and `censReg0impute` resulted in extremely low bias.  The bias from `ros` was also very low.    Next best were `censReg1naive´ and `censReg2naive` estimates which had very similar squared-bias and variance to one another.   In contrast, omission and all substitution methods resulted in very high bias relative to the aforementioned methods. 
+
+```{r chunk8a}
+# coef(censReg1_fit1)
+# coef(censReg2_fit1)
+# glimpse(estimates_subst4_beta)
+# glimpse(estimates_subst2_beta)
+# glimpse(estimates_subst1_beta)
+# glimpse(estimates_omit)
+# data_cens$cb28
+# censReg1_yearly_mean$cb28
+# coef(censReg1_fit1)
+all_results_beta_table <- round(all_results_beta*100000, 5)
+all_results_beta_table
+```
+
+
+#### Estimation of the MSE, squared-bias and variance for each year separately
+
+The three graphs A, B, C below show the variation of MSE, squared-bias, and variance respectively, over the simulated 15-year period.  The red line corresponds to model `omit_fit` (recall: omission of censored observations) and the black line corresponds to `best_fit`.
+
+```{r chunk8b, include=FALSE}
+all_results_year <- data.frame("year" = c(0:14) )
+
+all_results_best <- get_all_results_by_year(estimates_best)
+colnames(all_results_best) <- c("mse_best","bias_best","variance_best")
+
+all_results_omit <- get_all_results_by_year(estimates_omit)
+colnames(all_results_omit) <- c("mse_omit","bias_omit","variance_omit")
+
+all_results_subst2 <- get_all_results_by_year(estimates_subst2)
+colnames(all_results_subst2) <- c("mse_subst2","bias_subst2","variance_subst2")
+
+all_results_subst1 <- get_all_results_by_year(estimates_subst1)
+colnames(all_results_subst1) <- c("mse_subst1","bias_subst1","variance_subst1")
+
+all_results_subst4 <- get_all_results_by_year(estimates_subst4)
+colnames(all_results_subst4) <- c("mse_subst4","bias_subst4","variance_subst4")
+
+all_results_censReg1 <- get_all_results_by_year(estimates_censReg1)
+colnames(all_results_censReg1) <- c("mse_censReg1","bias_censReg1","variance_censReg1")
+
+# all_results_censReg1naive <- get_all_results_by_year(estimates_censReg1naive)
+# colnames(all_results_censReg1naive) <- c("mse_censReg1naive","bias_censReg1naive","variance_censReg1naive")
+
+all_results_censReg2 <- get_all_results_by_year(estimates_censReg2)
+colnames(all_results_censReg2) <- c("mse_censReg2","bias_censReg2","variance_censReg2")
+
+all_results_df <- data.frame(cbind(all_results_year, all_results_best, all_results_omit, all_results_subst2, all_results_subst1, all_results_subst4, all_results_censReg1, all_results_censReg2)) 
+all_results_tib <- as_tibble(all_results_df)
+all_results_tib
+```
+
+```{r chunk8b2, include=FALSE}
+
+# all_results_tib <- all_results_tib %>%
+#   mutate(year=c(0:9)) %>%
+#   mutate(bias_sq_plus_variance_best = bias_best+variance_best) %>%
+#   # mutate(bias_sq_plus_variance_omit = bias_omit+variance_omit) %>%
+#   mutate(bias_sq_plus_variance_subst2 = bias_omit+variance_subst2) %>%
+#   mutate(bias_sq_plus_variance_subst1 = bias_omit+variance_subst1) %>%
+#   mutate(bias_sq_plus_variance_subst4 = bias_omit+variance_subst4) %>%
+#   mutate(bias_sq_plus_variance_subst10=bias_omit+variance_subst10) %>%
+#   mutate(bias_sq_plus_variance_censReg1=bias_omit+variance_censReg1) %>%
+#   mutate(bias_sq_plus_variance_censReg2 = bias_omit+variance_censReg2)  
+
+# The results from the subst0, subst1, subst10, and omit methods 
+# are omitted from the graphs because the values are so high 
+# that auto-scaling causes the other results to be hard to see.
+
+plot_all_censReg_mse <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y=mse_censReg1, color="censReg1")) +
+  geom_line(mapping = aes(x = year, y = mse_censReg2, color="censReg2")) 
+
+plot_all_censReg_bias <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x=year, y=bias_censReg1, color="censReg1")) +
+  geom_line(mapping = aes(x = year, y=bias_censReg2, color="censReg2")) 
+
+plot_all_censReg_variance <- ggplot(data = all_results_tib) +
+  geom_line(mapping=aes(x=year,y=variance_censReg1, color="censReg1")) +
+  geom_line(mapping=aes(x=year, y=variance_censReg2, color="censReg2")) 
+
+
+plot_all_mse <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y = mse_best, color="best")) +
+  # geom_line(mapping = aes(x = year, y = mse_omit, color="omit")) +
+  geom_line(mapping = aes(x = year, y = mse_subst2, color="subst2")) +
+  # geom_line(mapping = aes(x = year, y = mse_subst1, color="subst1")) +
+  # geom_line(mapping = aes(x = year, y = mse_subst4, color="subst4")) +
+  geom_line(mapping = aes(x = year, y=mse_censReg1, color="censReg1")) +
+  # geom_line(mapping = aes(x = year, y=mse_censReg1naive, color="censReg1naive")) +
+  geom_line(mapping = aes(x = year, y = mse_censReg2, color="censReg2")) 
+  # geom_line(mapping = aes(x = year, y = mse_censReg2naive, color="censReg2naive"))
+
+
+plot_all_bias <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y = bias_best, color="best")) +
+  # geom_line(mapping = aes(x = year, y = bias_omit, color="omit")) +
+  geom_line(mapping = aes(x = year, y = bias_subst2, color="subst2")) +
+  # geom_line(mapping = aes(x=year, y = bias_subst1, color="subst1")) +
+  # geom_line(mapping = aes(x = year, y = bias_subst4, color="subst4")) +
+  geom_line(mapping = aes(x=year, y=bias_censReg1, color="censReg1")) +
+  # geom_line(mapping = aes(x=year, y=bias_censReg1naive, color="censReg1naive")) +
+  geom_line(mapping = aes(x = year, y=bias_censReg2, color="censReg2")) 
+  # geom_line(mapping = aes(x = year, y=bias_censReg2naive, color="censReg2naive"))
+
+plot_all_variance <- ggplot(data = all_results_tib) +
+  geom_line(mapping = aes(x = year, y = variance_best, color="best")) +
+  #geom_line(mapping = aes(x = year, y = variance_omit, color="omit")) +
+  geom_line(mapping = aes(x=year, y=variance_subst2, color="subst2")) +
+  # geom_line(mapping=aes(x=year, y=variance_subst1, color="subst1")) +
+  # geom_line(mapping = aes(x=year, y=variance_subst4, color="subst4")) +
+  geom_line(mapping=aes(x=year,y=variance_censReg1, color="censReg1")) +
+  # geom_line(mapping=aes(x=year,y=variance_censReg1naive, color="censReg1naive")) +
+  geom_line(mapping=aes(x=year, y=variance_censReg2, color="censReg2")) 
+  # geom_line(mapping=aes(x=year, y=variance_censReg2naive, color="censReg2naive"))
+
+# an alternative grid-like display.
+# plot_grid(plot_all_mse, plot_all_bias, plot_best_subst2_censReg1_bias, plot_all_variance, labels = "AUTO")
+```
+
+```{r chunk9}
+plot_all_censReg_mse
+plot_all_censReg_bias
+plot_all_censReg_variance
+plot_all_mse
+plot_all_bias
+plot_all_variance
+```
+
+#### Motivation for subsequent simulation studies
+
+Our goal is to investigate how well the censoring methods perform under alternative hypothetical scenarios, represented by alternative choices for the simulation parameters.  We will now repeat the previous study for $cprop = 0.1$ and $cprop=0.5$ respectively, to see how well these methods estimate `beta28year` at other LOD values.
+
+We will also now limit our attention to these 7 methods: `omit`, `subst1`, `subst2`, `censReg1`, `censReg2`, `censReg0impute`, `ros`.
+
+Here are the results for $cprop=0.1$ and $cprop=0.5$ respectively.
+
+```{r chunk10}
+estimates_omit_beta <- get_beta_estimates_omit(cprop=0.10, n_iter=100)
+estimates_subst2_beta <- get_beta_estimates_subst2(cprop=0.10, n_iter=100)
+estimates_subst1_beta <- get_beta_estimates_subst1(cprop=0.10, n_iter=100)
+estimates_censReg1_beta <- get_beta_estimates_censReg1(cprop=0.10, n_iter=100)
+estimates_censReg2_beta <- get_beta_estimates_censReg2(cprop=0.10, n_iter=100)
+estimates_censReg0impute_beta <- get_beta_estimates_censReg0impute(cprop=0.10, n_iter=100)
+estimates_ros_beta <- get_beta_estimates_ros(cprop=0.10, n_iter=100)
+
+all_results_beta_omit <- get_all_results_beta28year(estimates_omit_beta)
+rownames(all_results_beta_omit) <- "omit"
+colnames(all_results_beta_omit) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_subst2 <- get_all_results_beta28year(estimates_subst2_beta)
+rownames(all_results_beta_subst2) <- "subst2"
+colnames(all_results_beta_subst2) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_subst1 <- get_all_results_beta28year(estimates_subst1_beta)
+rownames(all_results_beta_subst1) <- "subst1"
+colnames(all_results_beta_subst1) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg1 <- get_all_results_beta28year(estimates_censReg1_beta)
+rownames(all_results_beta_censReg1) <- "censReg1"
+colnames(all_results_beta_censReg1) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg2 <- get_all_results_beta28year(estimates_censReg2_beta)
+rownames(all_results_beta_censReg2) <- "censReg2"
+colnames(all_results_beta_censReg2) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg0impute <- get_all_results_beta28year(estimates_censReg0impute_beta)
+rownames(all_results_beta_censReg0impute) <- "censReg0impute"
+colnames(all_results_beta_censReg0impute) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_ros <- get_all_results_beta28year(estimates_ros_beta)
+rownames(all_results_beta_ros) <- "ros"
+colnames(all_results_beta_ros) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta <- rbind(all_results_beta_omit, all_results_beta_subst2, all_results_beta_subst1, all_results_beta_censReg1, all_results_beta_censReg2, all_results_beta_censReg0impute, all_results_beta_ros) 
+all_results_beta_table <- round(all_results_beta*100000, 5)
+all_results_beta_table
+```
+
+```{r chunk11}
+estimates_omit_beta <- get_beta_estimates_omit(cprop=0.50, n_iter=100)
+estimates_subst2_beta <- get_beta_estimates_subst2(cprop=0.50, n_iter=100)
+estimates_subst1_beta <- get_beta_estimates_subst1(cprop=0.50, n_iter=100)
+estimates_censReg1_beta <- get_beta_estimates_censReg1(cprop=0.50, n_iter=100)
+estimates_censReg2_beta <- get_beta_estimates_censReg2(cprop=0.50, n_iter=100)
+estimates_censReg0impute_beta <- get_beta_estimates_censReg0impute(cprop=0.50, n_iter=100)
+estimates_ros_beta <- get_beta_estimates_ros(cprop=0.50, n_iter=100)
+
+all_results_beta_omit <- get_all_results_beta28year(estimates_omit_beta)
+rownames(all_results_beta_omit) <- "omit"
+colnames(all_results_beta_omit) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_subst2 <- get_all_results_beta28year(estimates_subst2_beta)
+rownames(all_results_beta_subst2) <- "subst2"
+colnames(all_results_beta_subst2) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_subst1 <- get_all_results_beta28year(estimates_subst1_beta)
+rownames(all_results_beta_subst1) <- "subst1"
+colnames(all_results_beta_subst1) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg1 <- get_all_results_beta28year(estimates_censReg1_beta)
+rownames(all_results_beta_censReg1) <- "censReg1"
+colnames(all_results_beta_censReg1) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg2 <- get_all_results_beta28year(estimates_censReg2_beta)
+rownames(all_results_beta_censReg2) <- "censReg2"
+colnames(all_results_beta_censReg2) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_censReg0impute <- get_all_results_beta28year(estimates_censReg0impute_beta)
+rownames(all_results_beta_censReg0impute) <- "censReg0impute"
+colnames(all_results_beta_censReg0impute) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta_ros <- get_all_results_beta28year(estimates_ros_beta)
+rownames(all_results_beta_ros) <- "ros"
+colnames(all_results_beta_ros) <- c("mse_beta","bias_beta","variance_beta")
+
+all_results_beta <- rbind(all_results_beta_omit, all_results_beta_subst2, all_results_beta_subst1, all_results_beta_censReg1, all_results_beta_censReg2, all_results_beta_censReg0impute, all_results_beta_ros) 
+all_results_beta_table <- round(all_results_beta*100000, 5)
+all_results_beta_table
+```
+
+####  Miscellaneous brain-storming-type notes 
+
+Cenreg did not work reliably (see v1 of this doc), so all censored regression will be done with censReg (followed by etruncnorm). 
+
+Sqrt(2) seems to be the best denominator.  I could also try other numbers denominators and compare.
+
+Found mse, squared-bias and variance with respect to estimation of beta for: 
+
+best, omit, subst2 (substitution with $\frac{LOD}{\sqrt(2)}$), subst1, subst4, censReg1, censReg2, ros (regression on order statistics, from "NADA" package. Reference `Tekindal2017_EvaluatingLeft-CensoredDataBySimulationStudy.pdf`).
+
+why was the bias from ros ten times smaller than from the other methods?  why was the variance much higher?  why did the other methods all give almost exactly the same bias (and similar variance)?  Is my implementation OK?
+
+Could find the boundaries of the parameter space, especially:
+
+`cprop` # censoring proportion
+
+`true_beta28year` #beta for cb28 ~ year
+
+Could try censReg with or without `year`.
+
+Could try different substitutions:
+
+LOD, LOD/sqrt(2), LOD/2, 0.
+
+### Appendices
+
+#### Appendix 1
+
+The two graphs A, B below show the variation of MSE (red curve) and squared-bias-plus-variance (black curve) from `best_fit` and `omit_fit` respectively, over the simulated 15-year period.   The famous result "Bias-variance decomposition" states $$ MSE = Bias^2 + Variance$$ so we expect the black and red curves to coincide (be superposed); happily they are :)
+
+```{r chunk100, eval=FALSE}
+# The (omitted) plots below show that the 
+# bias-variance decomposition holds for all results.
+
+# best_verify_bias_variance_decomp <- ggplot(data = all_results_tib) +
+#   geom_line(mapping = aes(x = year, y = mse_best, color="mse_best")) +
+#   geom_line(mapping = aes(x = year, y = bias_sq_plus_variance_best ))
+
+# omit_verify_bias_variance_decomp <- ggplot(data = all_results_tib) +
+#   geom_line(mapping = aes(x = year, y = mse_omit, color="mse_omit")) +
+#   geom_line(mapping = aes(x = year, y = bias_sq_plus_variance_omit ))
+```
+
+#### Appendix 2
+
+We now generate the dataset `omit_yearly_mean` from the fixed parameters as follows:
+
+12 values for the log-concentration of CB153 per year, for ten years, were generated and denoted as `cb153sim`.
+
+From every such CB153 value, the corresponding value for CB28 was generated.
+
+`median(cb28)` was used as the level of quantification `LOQ_p50`.
+
+Observations with CB28 < LOQ_p50 were removed from the dataset.
+
+Annual geometric means for CB28 and CB153 concentrations were generated. 
+
+The code chunk below generates `omit_yearly_mean` for 1000 iterations, fits a linear model `omit_fit` at each iteration, and computes the corresponding mse, squared-bias and variance.
